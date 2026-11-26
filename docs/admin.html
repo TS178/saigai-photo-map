@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp; connect-src 'self' https://script.google.com https://script.googleusercontent.com; base-uri 'self'; form-action 'none'; object-src 'none'">
+  <title>災害写真マップ｜管理</title>
+  <link rel="icon" type="image/png" href="icons/favicon.png">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
+  <link rel="stylesheet" href="vendor/markercluster/MarkerCluster.css">
+  <link rel="stylesheet" href="css/common.css">
+  <link rel="stylesheet" href="css/admin.css">
+  <link rel="stylesheet" href="css/print.css">
+  <script defer src="vendor/leaflet/leaflet.js"></script>
+  <script defer src="vendor/markercluster/leaflet.markercluster.js"></script>
+  <script defer src="vendor/qrcode-generator/qrcode.js"></script>
+  <script defer src="config.js"></script>
+  <script defer src="js/util.js"></script>
+  <script defer src="js/dom.js"></script>
+  <script defer src="js/api.js"></script>
+  <script defer src="js/geo.js"></script>
+  <script defer src="js/mapbase.js"></script>
+  <script defer src="js/zip.js"></script>
+  <script defer src="js/export.js"></script>
+  <script defer src="js/share.js"></script>
+  <script defer src="js/admin-map.js"></script>
+  <script defer src="js/admin-views.js"></script>
+  <script defer src="js/admin.js"></script>
+</head>
+<body>
+  <div id="version-banner" role="status" hidden></div>
+  <div id="complete-banner" role="status" hidden></div>
+  <section id="login" class="login-panel" aria-labelledby="login-title">
+    <h1 id="login-title">災害写真マップ 管理画面</h1>
+    <form id="login-form" class="stack">
+      <label for="admin-pass">管理画面のパスワード</label>
+      <input id="admin-pass" type="password" autocomplete="current-password" required maxlength="64">
+      <label class="check-label"><input id="remember" type="checkbox">このPCで記憶する</label>
+      <p class="muted">共用のPCではチェックを入れないでください。</p>
+      <button id="login-button" type="submit">ログイン</button>
+      <p id="login-error" class="error" role="alert"></p>
+    </form>
+  </section>
+  <div id="admin-app" hidden>
+    <header class="admin-header">
+      <div class="header-main">
+        <h1 id="app-name">災害写真マップ</h1>
+        <label class="disaster-select" for="disaster-select">表示する災害・訓練<select id="disaster-select"></select></label>
+        <span id="acceptance" class="badge"></span>
+        <button id="reload" type="button" class="secondary">↻ 全部読み直す</button>
+      </div>
+      <nav class="row" aria-label="管理の操作">
+        <div class="row" role="group" aria-label="表示の切替">
+          <button type="button" data-view="map" aria-pressed="true">地図</button>
+          <button type="button" data-view="tiles" class="secondary" aria-pressed="false">タイル</button>
+          <button type="button" data-view="list" class="secondary" aria-pressed="false">一覧</button>
+        </div>
+        <button id="filter-button" class="secondary" type="button">絞り込み</button>
+        <button id="export-button" class="secondary" type="button">出力</button>
+        <button id="print-button" class="secondary" type="button">印刷</button>
+        <button id="settings-button" class="secondary" type="button">設定</button>
+        <button id="logout" class="secondary" type="button">ログアウト</button>
+      </nav>
+    </header>
+    <div id="past-banner" role="status" hidden></div>
+    <div id="current-banner" role="status" hidden></div>
+    <div class="result-bar"><span id="result-count" role="status" aria-live="polite"></span><span id="load-state" role="status"></span><button id="new-notice" type="button" hidden></button></div>
+    <div id="position-tools" class="panel row" role="status" hidden></div>
+    <main class="admin-layout">
+      <div id="view-area">
+        <section id="map-view" aria-label="投稿の地図"><div id="admin-map" class="map"></div></section>
+        <section id="tiles-view" aria-label="写真のタイル" hidden></section>
+        <section id="list-view" aria-label="投稿の一覧" hidden></section>
+      </div>
+      <aside id="summary-panel" aria-label="件数と新着"></aside>
+    </main>
+  </div>
+  <section id="print-mode" hidden aria-label="印刷用一覧">
+    <div class="print-toolbar row no-print"><button id="print-now" type="button">印刷する</button><button id="print-back" type="button" class="secondary">戻る</button></div>
+    <div id="print-pages"></div>
+  </section>
+  <div id="connection-banner" role="status" hidden></div>
+  <div id="modal-host"></div>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <noscript>JavaScriptを有効にしてください。</noscript>
+</body>
+</html>

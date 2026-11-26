@@ -1,0 +1,8 @@
+# 試験の撮影（試験のたびに作り直す。手引きの画像は 手引き/img に写してある）
+tests/e2e/shots/*.png
+# 試験の一時フォルダ
+.tmp-spm-*/
+# OS が作るファイル
+Thumbs.db
+desktop.ini
+.DS_Store

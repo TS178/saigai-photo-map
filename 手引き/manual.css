@@ -1,0 +1,16 @@
+:root { font-family: system-ui, -apple-system, "Yu Gothic UI", Meiryo, sans-serif; font-size: 18px; line-height: 1.8; color: #1a1a1a; background: white; }
+* { box-sizing: border-box; }
+body { max-width: 960px; margin: auto; padding: 28px; }
+header { border-bottom: 3px solid #0b57d0; padding-bottom: 16px; }
+h1 { font-size: 1.8rem; line-height: 1.4; } h2 { font-size: 1.35rem; margin-top: 2em; border-bottom: 1px solid #737d8a; } h3 { font-size: 1.1rem; }
+a { color: #0847aa; overflow-wrap: anywhere; } nav { display: flex; flex-wrap: wrap; gap: 16px; }
+li { padding-left: 6px; margin: 12px 0; } p, td { overflow-wrap: anywhere; }
+.note { border-left: 6px solid #0b57d0; background: #f3f5f8; padding: 16px; }
+.important { border-left: 6px solid #b45309; background: #fff5d5; padding: 16px; }
+code { font-size: .95em; background: #f3f5f8; padding: 2px 5px; overflow-wrap: anywhere; }
+figure { margin: 24px 0; border: 1px solid #c9ced6; padding: 14px; break-inside: avoid; }
+figure img { display: block; max-width: 100%; max-height: 470px; margin: auto; object-fit: contain; } figcaption { font-weight: bold; margin-top: 12px; }
+table { width: 100%; border-collapse: collapse; margin: 18px 0; } th, td { border: 1px solid #737d8a; padding: 12px; text-align: left; vertical-align: top; } th { background: #f3f5f8; } .check { width: 4em; text-align: center; font-size: 1.4rem; }
+footer { border-top: 1px solid #737d8a; margin-top: 36px; padding-top: 16px; }
+@page { size: A4; margin: 16mm; }
+@media print { :root { font-size: 12pt; line-height: 1.65; } body { padding: 0; max-width: none; } nav { display: none; } h1 { font-size: 21pt; } h2 { font-size: 16pt; break-after: avoid; } li, tr { break-inside: avoid; } figure img { max-height: 105mm; } a { color: black; } thead { display: table-header-group; } }

@@ -1,0 +1,80 @@
+# 災害写真マップ 1.0.0
+
+災害時に職員・消防団員がスマホから写真と場所を送り、本部が地図・写真・一覧で確認するための仕組みです。写真は非公開のGoogleドライブ、記録と設定はGoogleスプレッドシートに保存します。投稿ページと管理画面はGitHub Pagesで公開します。
+
+設定は [01 最初の設定](手引き/01_最初の設定.html)、運用は [02 災害のときの使い方](手引き/02_災害のときの使い方.html) を参照してください。本番前に [03 実機の確認表](手引き/03_実機の確認表.html) を使い、試験環境からの移行は [04 本番への移し方](手引き/04_本番への移し方.html) に従います。
+
+## フォルダ
+
+| 場所 | 内容 |
+|---|---|
+| `docs/` | GitHub Pagesで公開する投稿ページ・管理画面・使い方・同梱部品 |
+| `docs/config.js` | 公開したGASのURLを設定。配布時の `gasUrl` は空 |
+| `gas/Code.gs` | スプレッドシートのApps Scriptへ全体を貼り付けるコード |
+| `gas/appsscript.json` | GASの参考用マニフェスト |
+| `tests/` | GAS・計算処理・静的検査と、メモリ内の試験用サーバー |
+| `tests/e2e/` | headless Edgeによる画面の自動確認と撮影 |
+| `tools/` | 構文検査・アイコン作成・手引き画像のコピー |
+| `手引き/` | A4で印刷できる日本語の手順書。画像は `img/` |
+| `設計/` | 仕様書（今後の調整の基準）。GitHub Pages では公開されない |
+
+GitHub Pagesの公開対象は `main` ブランチの `/docs` です。`docs/vendor/` は変更せず、`docs/.nojekyll` も含めて配布します。合言葉とパスワードはコード・README・手引き・コミットへ書かず、町で決めた場所に保管してください。
+
+## PCのフォルダから管理画面を開く
+
+`docs` フォルダを丸ごとPCに写し、写した `config.js` の `gasUrl` に公開済みのGASの `/exec` URLを入れます。`admin.html` をダブルクリックすると、`file://` から管理画面を使えます。GASと地図への通信は必要です。
+
+投稿用のリンクとQRには、公開されたHTTPSの投稿ページを使います。HTTPSの管理画面では投稿ページのURLが設定シートに自動保存されます。フォルダから開く場合は、その保存済みのURLを使うか、設定の「投稿ページのURL」に入力して保存してください。投稿ページのオフライン保存はHTTPSまたはlocalhostで使います。
+
+管理画面は60秒ごとに受付の状態・合言葉・災害一覧を取り直します。「↻ 全部読み直す」でも取り直せます。外で新しい災害を始めても、見ている災害はそのままです。
+
+## 試験の流し方
+
+WindowsとNode.js 24を使います。外部npmパッケージは不要です。次のコマンドは作業フォルダで実行します。
+
+```powershell
+node tools/check-syntax.mjs
+node --test tests/gas.test.mjs tests/unit.test.mjs tests/static.test.mjs
+```
+
+画面の自動確認は、Edgeを起動してよい担当者が実行してください。
+
+```powershell
+node tests/e2e/run-all.mjs
+```
+
+標準の場所にEdgeがない場合は、環境変数 `SPM_EDGE_PATH` に `msedge.exe` の絶対パスを指定します。画面確認は毎回新しい `edge-prof-spm-` で始まる一時プロフィールと空きポートを使い、終了時にEdgeを止めて片付けます。ダウンロードと `file://` 確認の写しも毎回新しく作り、終了時に消します。
+
+項目ごとに「合格／不合格」を表示し、不合格がある場合は終了コード1になります。投稿・管理・出力・印刷・外部で変わった設定・安全性・見やすさを確かめます。60秒の自動取り直しも実時間で待ちます。地図タイルは読み込み前にCDPで横取りして256×256の無地PNGを返し、OpenStreetMapや地理院へ取りに行きません。その他の外部要求も遮断し、記録と照合します。本物のGoogleサービスには接続しません。
+
+撮影結果は `tests/e2e/shots/` です。画面確認を終えた担当者は、次を実行して手引き用の画像を写します。画像がそろっていない場合は不足名を表示し、コピーせず終了コード1で終わります。
+
+```powershell
+node tools/copy-manual-images.mjs
+```
+
+撮影には試験用の自動生成した合言葉・共有QRが写る場合があります。本番の画面や本番の秘密を撮影用フォルダに入れないでください。手引きの画像がまだない配布物では、画像の説明文を読み、画面確認の後で画像を追加します。
+
+## 試験用サーバーだけを起動する
+
+```powershell
+node tests/mock-server.mjs
+```
+
+サイトと偽GASのURLが表示されます。接続先は `127.0.0.1` だけです。終了はCtrl+Cです。起動しただけでは未設定です。偽GASの操作口 `POST /test/run` に `{"fn":"setup_","args":[]}`、続いて `{"fn":"startDisaster_","args":["災害","試験の大雨","メニュー"]}` を送ると、試験用の設定と災害を作れます。
+
+`startMock({sitePort:0, gasPort:0})` は `{siteUrl, gasUrl, gas, close()}` を返します。`GET /test/state` にはシート・ドライブ・試験用の秘密・OPTIONS回数が入ります。`POST /test/flags` の `{"dropNextUploadResponse":true}` は、次のuploadを保存した後に返事だけを失わせます。試験用の状態はすべてメモリ内で、終了すると消えます。
+
+偽GASは実際の `gas/Code.gs` をvmで実行します。`/exec` の応答は302で `/echo` に転送した後にJSONを返し、OPTIONSには405を返して数えます。サイトのCSPへの偽GAS起点の追加は配信時だけ行い、配布ファイルを書き換えません。
+
+## 同梱部品と地図
+
+- Leaflet 1.9.4：BSD-2-Clause
+- Leaflet.markercluster 1.5.3：MIT
+- qrcode-generator 2.0.4：MIT
+
+取り込み元・照合値・ライセンスの場所は [docs/vendor/SOURCES.md](docs/vendor/SOURCES.md) にあります。QRコードは株式会社デンソーウェーブの登録商標です。地図の出典は [OpenStreetMap contributors](https://www.openstreetmap.org/copyright) と [地理院タイル](https://maps.gsi.go.jp/development/ichiran.html) です。航空写真では全国最新写真とGRUS画像（© Axelspace）の出典も表示します。
+
+OpenStreetMapの [タイル利用方針](https://operations.osmfoundation.org/policies/tiles/) を守るため、出典を常に表示し、Refererを止める設定を入れません。URLにサブドメイン指定の `{s}` を使わず、地図画像の先読み・一括取得・オフライン保存をしません。Service Workerは地図タイルを保存も横取りもしません。地図の拡大は9〜19、航空写真は14以上で地理院から読み込みます。地図が表示できない場合は「地理院地図（予備）」を選べます。
+
+公開時にはGAS・GitHub Pages・地図の通信が必要です。通信や地図表示に使うプログラムは配布フォルダに含まれています。写真の保存期間・権限・出力物の扱いは町の決まりに従ってください。

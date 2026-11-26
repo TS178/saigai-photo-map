@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self'; base-uri 'self'; object-src 'none'"><title>01 最初の設定｜災害写真マップ</title><link rel="stylesheet" href="manual.css"></head><body>
+<header><h1>01 最初の設定</h1><p>災害写真マップ 1.0.0 ／ 初めて準備する担当者向け</p><nav><a href="02_災害のときの使い方.html">災害のときの使い方</a><a href="03_実機の確認表.html">実機の確認表</a><a href="04_本番への移し方.html">本番への移し方</a></nav></header>
+<p class="note">防災担当の共用Googleアカウントと、公開に使うGitHubアカウントを用意してください。写真はGoogleドライブ、記録はスプレッドシートに保存されます。</p>
+<p>この手引きで「GAS」と呼ぶものは、Googleの「Apps Script」で動く写真受付の仕組みです。「URL」はリンク先のアドレスのことです。</p>
+<h2>1 記録用のスプレッドシートを作る</h2><ol>
+<li>防災担当の共用GoogleアカウントでGoogleスプレッドシートを開きます。</li>
+<li>「空白のスプレッドシート」を押します。</li>
+<li>名前を「災害写真マップ_記録」に変えます。</li>
+<li>「拡張機能」を押します。</li>
+<li>「Apps Script」を押します。</li>
+<li>左の「コード.gs」を押します。</li>
+<li>最初から入っているコードをすべて選びます。</li>
+<li>選んだコードを消します。</li>
+<li>配布フォルダの <code>gas/Code.gs</code> をUTF-8で開きます。</li>
+<li>ファイルの中身をすべてコピーします。</li>
+<li>Apps Scriptの「コード.gs」に貼り付けます。</li>
+<li>「プロジェクトを保存」を押します。</li>
+</ol><p>貼り付けたコードの最後に <code>var SPM_CODE_END = '1.0.0';</code> があることを確認してください。</p>
+<h2>2 最初の設定と許可をする</h2><ol>
+<li>スプレッドシートの画面に戻ります。</li>
+<li>ブラウザの「再読み込み」を押します。</li>
+<li>上の「災害写真マップ」を押します。</li>
+<li>「①最初の設定」を押します。</li>
+<li>承認を求められたら「続行」を押します。</li>
+<li>防災担当の共用Googleアカウントを選びます。</li>
+<li>「このアプリは Google で確認されていません」と出た場合は「詳細」を押します。</li>
+<li>同じ画面に出た「（プロジェクト名）（安全ではないページ）に移動」を押します。</li>
+<li>求められた権限を確認して「許可」を押します。</li>
+<li>設定画面が出ない場合は、もう一度「①最初の設定」を押します。</li>
+<li>地図の中心の入力欄に、役場などの緯度と経度を貼ります。</li>
+<li>「地図の中心を保存する」を押します。</li>
+<li>表示された合言葉を所定の保管場所に控えます。</li>
+<li>表示された管理画面のパスワードを所定の保管場所に控えます。</li>
+</ol><p class="important">確認されていないという表示は、自分で貼り付けたコードを初めて動かすために出ます。自分がこの手順で作ったプロジェクトであることを確認して進めます。合言葉とパスワードは、人に見せたりGitHubに載せたりしないでください。</p><p>地図の中心は空のままでも使えます。初回の設定画面で、地図の中心を保存せず閉じてもかまいません。「設定済みです」と出るときは、今ある設定が使われます。</p>
+<h2>3 GASをウェブアプリとして公開する</h2><ol>
+<li>Apps Scriptの画面に戻ります。</li>
+<li>「デプロイ」を押します。</li>
+<li>「新しいデプロイ」を押します。</li>
+<li>「種類の選択」の歯車を押します。</li>
+<li>「ウェブアプリ」を選びます。</li>
+<li>「次のユーザーとして実行」を「自分」にします。</li>
+<li>「アクセスできるユーザー」を「全員」にします。</li>
+<li>「デプロイ」を押します。</li>
+<li>出てきたウェブアプリのURLをコピーします。</li>
+</ol><p>使うURLは末尾が <code>/exec</code> のものです。<code>/dev</code> のURLは使いません。「全員」を選べない場合は、町のGoogleアカウント管理担当に確認してください。</p>
+<h2>4 投稿ページの公開先を準備する</h2><ol>
+<li>配布フォルダの <code>docs/config.js</code> をUTF-8で開きます。</li>
+<li><code>gasUrl: ''</code> の2つの引用符の間に、コピーしたURLを貼り付けます。</li>
+<li><code>docs/config.js</code> を保存します。</li>
+<li>GitHubで公開用のリポジトリを開きます。</li>
+<li>「Add file」を押します。</li>
+<li>「Upload files」を押します。</li>
+<li>配布物の <code>docs</code>・<code>gas</code>・<code>tests</code>・<code>tools</code>・<code>手引き</code> と <code>README.md</code> を追加します。</li>
+<li>「Commit changes」を押します。</li>
+<li>リポジトリの「Settings」を押します。</li>
+<li>左の「Pages」を押します。</li>
+<li>「Source」で「Deploy from a branch」を選びます。</li>
+<li>「Branch」で「main」を選びます。</li>
+<li>公開フォルダで「/docs」を選びます。</li>
+<li>「Save」を押します。</li>
+</ol><p class="important">控えた秘密のメモ（合言葉・パスワード）はアップロードしません。<code>docs/vendor</code>・<code>docs/icons</code> と、隠しファイルの <code>docs/.nojekyll</code> も含めてください。ファイル名の大文字・小文字は変えません。</p>
+<h2>5 管理画面で試しに使う</h2><ol>
+<li>公開の完了を数分待ちます。</li>
+<li>「Pages」に表示された公開先を開きます。</li>
+<li>アドレスの末尾を <code>/admin.html</code> にして開きます。</li>
+<li>管理画面のパスワードを入れます。</li>
+<li>「ログイン」を押します。</li>
+<li>地図を役場などの位置に動かします。</li>
+<li>地図の拡大を町の範囲に合わせます。</li>
+<li>「設定」を押します。</li>
+<li>「いまの地図の表示を初期位置にする」を押します。</li>
+<li>「実行する」を押します。</li>
+<li>「訓練を始める」を押します。</li>
+<li>訓練の名前を入れます。</li>
+<li>「この名前で始める」を押します。</li>
+<li>「実行する」を押します。</li>
+<li>投稿用のQRをスマホで読みます。</li>
+<li>写真を1枚、試しに送ります。</li>
+<li><a href="03_実機の確認表.html">03 実機の確認表</a>で使う端末を確かめます。</li>
+</ol><figure><img src="img/管理_設定.png" alt="管理画面の設定と投稿用QR"><figcaption>設定画面。投稿用リンクとQRはここから配ります。</figcaption></figure>
+<h2>6 コードを直したとき</h2><ol>
+<li>Apps Scriptの「コード.gs」を新しい <code>gas/Code.gs</code> の中身にすべて貼り替えます。</li>
+<li>「プロジェクトを保存」を押します。</li>
+<li>「デプロイ」を押します。</li>
+<li>「デプロイを管理」を押します。</li>
+<li>使っているデプロイを選びます。</li>
+<li>鉛筆の「編集」を押します。</li>
+<li>「バージョン」で「新しいバージョン」を選びます。</li>
+<li>「デプロイ」を押します。</li>
+<li>GitHubの <code>docs</code> を同じ配布版のファイルに更新します。</li>
+<li>管理画面の「↻ 全部読み直す」を押します。</li>
+</ol><p class="important">この方法ではウェブアプリのURLは変わりません。「新しいデプロイ」を作ると別のURLになります。誤って新しく作ったときは、使うURLと <code>config.js</code> が一致しているか確認してください。</p>
+<h2>7 庁内PCで公開ページが開けない場合</h2><ol>
+<li><code>docs</code> フォルダを丸ごとPCに写します。</li>
+<li>写した <code>config.js</code> の <code>gasUrl</code> に公開したGASのURLを入れます。</li>
+<li>写した <code>admin.html</code> をダブルクリックします。</li>
+<li>管理画面のパスワードを入れます。</li>
+<li>「ログイン」を押して管理画面に入ります。</li>
+<li>「設定」の「投稿ページのURL」に、GitHub Pagesで公開した投稿ページのURLを入れます。</li>
+<li>「投稿ページのURLを保存」を押します。</li>
+</ol><p>GASと地図の通信ができるPCで使えます。管理画面のファイルだけを開ける方法です。スマホへの投稿用リンクは、公開されたHTTPSの投稿ページを使います。</p>
+<footer>災害写真マップ 1.0.0 ／ 合言葉・パスワードはこの手引きに書き込まず、町で決めた場所に保管してください。</footer></body></html>
