@@ -1,6 +1,6 @@
 (function (root) {
 'use strict';
-const CACHE_VERSION = 'spm-1.1.1';
+const CACHE_VERSION = 'spm-1.2.0';
 // 同じ製品版の修正でも、保存済みの古い動画送信処理を入れ替える。
 const APP_CACHE = CACHE_VERSION + '-video-resume-1';
 const APP_FILES = [

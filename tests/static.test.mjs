@@ -23,7 +23,7 @@ test('公開する名前と.nojekyll', () => {
 });
 test('GAS・設定・Service Workerの版が一致する', () => {
   const gas = read('gas/Code.gs'), version = gas.match(/var APP_VERSION\s*=\s*'([^']+)'/)[1];
-  assert.equal(version, '1.1.1');
+  assert.equal(version, '1.2.0');
   assert.equal(gas.match(/var SPM_CODE_END\s*=\s*'([^']+)'/)[1], version);
   assert.match(gas.trimEnd().split('\n').pop(), /^var SPM_CODE_END = '[^']+';$/);
   assert.equal(read('docs/config.js').match(/expectedGasVersion:\s*'([^']+)'/)[1], version);

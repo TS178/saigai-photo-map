@@ -106,8 +106,16 @@
     if (reply.error === 'auth') logout('もう一度パスワードを入れてください。');
     return reply;
   }
-  function merge(id, reply, notify) {
+  function cleanRemoved(id) {
+    var data = cache(id), pids = new Set(Array.from(data.items.values(), function (r) { return r.pid; }));
+    data.thumbs.forEach(function (value, key) { if (!data.items.has(key)) data.thumbs.delete(key); });
+    state.photos.forEach(function (value, key) { if (key.startsWith(id + ':') && !data.items.has(key.slice(id.length + 1))) state.photos.delete(key); });
+    [state.unread, state.opened].forEach(function (set) { set.forEach(function (key) { if (key.startsWith(id + ':') && !pids.has(key.slice(id.length + 1))) set.delete(key); }); });
+  }
+  function merge(id, reply, notify, replace) {
     var data = cache(id), existing = new Set(Array.from(data.items.values(), function (r) { return r.pid; })), fresh = new Set();
+    if (Number(reply.rev) < Math.max(data.rev, data.minRev || 0)) return fresh;
+    if (replace || reply.full === true) { data.items.clear(); data.thumbs.clear(); }
     (reply.items || []).forEach(function (r) {
       var old = data.items.get(r.id);
       if (old && Number(old.rev) > Number(r.rev)) return;
@@ -115,6 +123,7 @@
       if (notify && !existing.has(r.pid) && !state.opened.has(id + ':' + r.pid)) { fresh.add(r.pid); state.unread.add(id + ':' + r.pid); }
     });
     Object.keys(reply.thumbs || {}).forEach(function (key) { data.thumbs.set(key, reply.thumbs[key]); });
+    if (replace || reply.full === true) cleanRemoved(id);
     if (reply.disaster) {
       var index = state.disasters.findIndex(function (d) { return d.id === id; });
       if (index >= 0) state.disasters[index] = reply.disaster;
@@ -144,19 +153,18 @@
       if (reply.error === 'network' || reply.error === 'server') dom.banner('error', 'サーバーに接続できません（自動でやり直します）', 'connection-banner');
       return;
     }
-    if (full) { data.items.clear(); data.thumbs.clear(); data.rev = 0; }
-    var fresh = merge(id, reply, wasLoaded && !full);
+    var fresh = merge(id, reply, wasLoaded && !full, full);
     dom.banner('error', '', 'connection-banner');
     if (id === state.d) {
       byId('load-state').textContent = '最終更新 ' + S.util.formatJst(new Date()).slice(11);
-      render(); S.adminMap.initialView(groups()); S.adminMap.ripple(fresh);
+      render(); S.adminViews.refreshDetail(); S.adminMap.initialView(groups()); S.adminMap.ripple(fresh);
     }
   }
   function schedule() {
     root.clearTimeout(timer); if (!state.token) return;
     var seconds = document.hidden ? 60 : S.api.pollSeconds(state.settings.pollSeconds || 20);
     timer = root.setTimeout(async function () {
-      if (isCurrent()) await load(false);
+      await load(false);
       schedule();
     }, Math.max(1, seconds) * 1000);
   }
@@ -195,8 +203,26 @@
     if (!reply.ok) { if (state.token) dom.toast(reply.message); return false; }
     // updateの更新番号は一覧全体の取得位置にしない。間に届いた他の投稿を次のlistで拾う。
     var data = cache(id);
+    if (Number(reply.rev) < (data.minRev || 0)) return false;
     (reply.items || []).forEach(function (r) { var old = data.items.get(r.id); if (!old || Number(r.rev) >= Number(old.rev)) data.items.set(r.id, r); });
     if (state.d === id) render(); dom.toast('保存しました。'); return true;
+  }
+  async function remove(ids, disasterId) {
+    var id = disasterId || state.d, data = cache(id);
+    var reply = await request('remove', { d: id, ids: ids });
+    if (!reply.ok) { if (state.token) dom.toast(S.util.userMessage(reply, '削除できませんでした。もう一度お試しください。')); return false; }
+    var numbers = new Set();
+    ids.forEach(function (key) { var item = data.items.get(key); if (item) numbers.add(item.no); data.items.delete(key); });
+    // 先に始まったlistの返事で削除済みの行が戻ることを防ぐ。取得位置は進めない。
+    data.minRev = Math.max(data.minRev || 0, Number(reply.rev) || 0);
+    cleanRemoved(id);
+    var disaster = state.disasters.find(function (d) { return d.id === id; });
+    if (disaster) { disaster.photos = data.items.size; disaster.posts = new Set(Array.from(data.items.values(), function (r) { return r.pid; })).size; }
+    persist();
+    if (state.d === id) { render(); S.adminViews.refreshDetail(); }
+    dom.toast(reply.message ? S.util.userMessage(reply, '削除後のファイルをドライブで確認してください。') : numbers.size ? Array.from(numbers, function (n) { return 'No.' + n; }).join('・') + ' を削除しました' : '対象の投稿はすでに削除されています。');
+    if (state.d === id) load(true).catch(function (e) { if (state.token) dom.toast(S.util.userMessage(e, '削除後の一覧を読み直せませんでした。「↻ 全部読み直す」を押してください。')); });
+    return true;
   }
   async function configure(payload) {
     if (configuring) return null;
@@ -290,6 +316,6 @@
       await enter();
     }
   }
-  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, request: request, update: update, configure: configure, refreshState: refreshState, photo: photo, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
+  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
   document.addEventListener('DOMContentLoaded', function () { init().catch(function () { byId('login-error').textContent = '画面の準備ができませんでした。ページを読み直してください。'; }); });
 })(typeof window !== 'undefined' ? window : globalThis);

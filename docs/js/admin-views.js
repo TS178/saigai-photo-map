@@ -42,6 +42,18 @@
     var box = modal('確認'); box.body.appendChild(el('p', { text: message }));
     box.body.appendChild(el('div', { class: 'row' }, [button('実行する', async function () { await accept(box); }), button('やめる', close, 'secondary')]));
   }
+  function confirmRemove(photos, d, done, cancel) {
+    if (!photos.length) return;
+    if (photos.length > 200) { dom.toast('一度に削除できる写真・動画は200件までです。選ぶ投稿を減らしてください。'); return; }
+    var numbers = Array.from(new Set(photos.map(function (p) { return p.no; }))), videos = photos.filter(function (p) { return p.kind === 'video'; }).length;
+    var box = modal('削除の確認');
+    box.body.append(el('p', { class: 'remove-summary', text: numbers.map(function (no) { return 'No.' + no; }).join('・') + ' の写真・動画 ' + photos.length + '件（写真' + (photos.length - videos) + '・動画' + videos + '）を削除しますか？' }), el('p', { text: '記録の行は消えます。写真・動画のファイルは Google ドライブのゴミ箱に移します（30日以内ならドライブのゴミ箱から戻せます）。' }));
+    box.body.appendChild(el('div', { class: 'row' }, [button('削除する', async function () {
+      var ok = await S.admin.remove(photos.map(function (p) { return p.id; }), d);
+      if (!ok || box.closed) return;
+      close(); if (done && S.admin.state.d === d) done();
+    }, 'danger'), button('やめる', function () { close(); if (cancel && S.admin.state.d === d) cancel(); }, 'secondary')]));
+  }
   function field(label, input) { return el('label', {}, [el('span', { text: label }), input]); }
   function check(label, checked, change, selectionOnly) {
     var input = el('input', { type: 'checkbox', checked: checked }); if (change) input.addEventListener('change', function () { change(input.checked); });
@@ -70,6 +82,12 @@
   }
   function listView(posts) {
     var area = S.admin.byId('list-view'); dom.clear(area);
+    var selected = posts.filter(function (p) { return S.admin.state.selected.has(p.pid); });
+    if (selected.length) {
+      var d = S.admin.state.d, photos = [];
+      selected.forEach(function (p) { photos.push.apply(photos, p.photos); });
+      area.appendChild(el('div', { class: 'list-remove-tools row' }, [button('選んだ投稿を削除（' + selected.length + '件）', function () { confirmRemove(photos, d); }, 'danger')]));
+    }
     var table = el('table', { class: 'post-table' }), head = el('thead'), tr = el('tr'), body = el('tbody');
     var selectAll = check('表示中をすべて選ぶ', posts.length > 0 && posts.every(function (p) { return S.admin.state.selected.has(p.pid); }), function (checked) { posts.forEach(function (p) { if (checked) S.admin.state.selected.add(p.pid); else S.admin.state.selected.delete(p.pid); }); S.admin.render(); }, true);
     tr.appendChild(el('th', { scope: 'col' }, [selectAll.label]));
@@ -151,6 +169,7 @@
     var index = Math.max(0, post.photos.findIndex(function (p) { return p.id === photoId; })), photoSerial = 0;
     async function showPhoto() {
       var requestNumber = ++photoSerial, photo = post.photos[index];
+      removeOne.textContent = photo.kind === 'video' ? 'この動画を削除' : 'この写真を削除';
       releaseMedia();
       dom.clear(photoArea); photoArea.appendChild(el('p', { text: '読み込み中…', role: 'status' }));
       photoCount.textContent = (index + 1) + ' / ' + post.photos.length + '件'; shot.textContent = '撮影日時：' + (photo.shot || '記録なし'); previous.disabled = index <= 0; next.disabled = index >= post.photos.length - 1;
@@ -159,7 +178,7 @@
         var reply;
         if (photo.kind !== 'video') {
           try { reply = await S.admin.photo(photo.id, d); }
-          catch (e) { if (e.code !== 'video') throw e; photo.kind = 'video'; }
+          catch (e) { if (e.code !== 'video') throw e; photo.kind = 'video'; removeOne.textContent = 'この動画を削除'; }
           if (box.closed || requestNumber !== photoSerial) return;
         }
         if (photo.kind === 'video') {
@@ -220,6 +239,23 @@
     box.body.appendChild(button(post.hidden ? '表示に戻す' : '非表示にする', function () {
       confirm('No.' + post.no + 'を' + (post.hidden ? '表示に戻しますか？' : '非表示にしますか？ 写真と記録は残ります。'), async function () { if (await S.admin.update(pid, { hidden: !post.hidden }, d)) close(); });
     }, 'secondary'));
+    function reopen() {
+      var remaining = S.admin.groups().find(function (p) { return p.pid === pid; });
+      if (remaining) detail(pid, remaining.photos[Math.min(index, remaining.photos.length - 1)].id);
+    }
+    var removeOne = button('この写真を削除', function () {
+      var photo = post.photos[index];
+      confirmRemove([photo], d, reopen, function () { detail(pid, photo.id); });
+    }, 'danger');
+    box.body.appendChild(el('div', { class: 'detail-remove-tools stack' }, [removeOne, button('この投稿をまるごと削除（写真・動画 ' + post.photos.length + '件）', function () { confirmRemove(post.photos, d, null, function () { detail(pid, post.photos[index].id); }); }, 'danger')]));
+    box.refreshDetail = function () {
+      var current = S.admin.groups().find(function (p) { return p.pid === pid; });
+      if (!current) { close(); return; }
+      if (current.photos.map(function (p) { return p.id; }).join(',') !== post.photos.map(function (p) { return p.id; }).join(',')) {
+        var photo = post.photos[index];
+        detail(pid, current.photos.some(function (p) { return p.id === photo.id; }) ? photo.id : current.photos[Math.min(index, current.photos.length - 1)].id);
+      }
+    };
     updateDrive();
     previous.addEventListener('click', updateDrive); next.addEventListener('click', updateDrive);
     showPhoto();
@@ -284,6 +320,7 @@
     box.refreshSettings();
   }
   function refreshSettings() { if (active && active.refreshSettings) active.refreshSettings(); }
+  function refreshDetail() { if (active && active.refreshDetail) active.refreshDetail(); }
   function stamp(date) { var text = S.util.formatJst(date); return text.slice(0, 10).replace(/\//g, '') + '-' + text.slice(11, 16).replace(':', ''); }
   function exportName(extension, disaster) { return S.util.safeFileName('災害写真_' + (disaster ? disaster.name : '記録') + '_' + stamp(new Date()), 150) + '.' + extension; }
   function bytes(b64) { var binary = root.atob(b64), data = new Uint8Array(binary.length); for (var i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i); return data; }
@@ -384,5 +421,5 @@
     S.admin.byId('print-now').addEventListener('click', function () { root.print(); });
     S.admin.byId('print-back').addEventListener('click', function () { S.admin.byId('print-mode').hidden = true; dom.clear(S.admin.byId('print-pages')); S.admin.byId('admin-app').hidden = false; S.adminMap.resize(); });
   }
-  S.adminViews = { init: init, render: render, button: button, modal: modal, close: close, confirm: confirm, detail: detail, settings: settings, refreshSettings: refreshSettings, filters: filters, printMode: printMode };
+  S.adminViews = { init: init, render: render, button: button, modal: modal, close: close, confirm: confirm, detail: detail, settings: settings, refreshSettings: refreshSettings, refreshDetail: refreshDetail, filters: filters, printMode: printMode };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -470,6 +470,86 @@ try {
     await admin.wait(`SPM.admin.groups().find(p=>p.pid===${JSON.stringify(chosen.pid)}).hidden === false`);
     await click(admin, '絞り込み'); await click(admin, '条件をすべて解除'); await click(admin, 'この条件で表示する');
   });
+  await check('管理 削除', async () => {
+    // この項目専用の投稿だけを作って消し、後続の写真数の前提を保つ。
+    await admin.bringToFront(); await closeDialog(admin);
+    const baseline = rows(await state()).length;
+    const created = [await directUpload({ note: '削除試験・詳細' }), await directUpload({ note: '削除試験・選択1' }), await directUpload({ note: '削除試験・選択2' })];
+    await admin.wait(`${JSON.stringify(created.map(p => p.id))}.every(id=>SPM.admin.cache().items.has(id))`);
+    const saved = rows(await state()).filter(r => created.some(p => p.id === r['写真ID']));
+    const chosen = (await groups()).find(p => p.pid === created[0].pid); assert.ok(chosen);
+    const viewer = await browser.newPage('about:blank', { isolated: true });
+    try {
+      await viewer.viewport(1366, 900); await viewer.bringToFront();
+      await viewer.navigate(mock.siteUrl + '/admin.html?api=' + encodeURIComponent(mock.gasUrl) + '&poll=2');
+      await viewer.fill(q('#admin-pass'), (await credentials()).pass); await click(viewer, 'ログイン');
+      await viewer.wait(`SPM.admin.state.d===${JSON.stringify(originalId)} && SPM.admin.cache().loaded && ${JSON.stringify(created.map(p => p.id))}.every(id=>SPM.admin.cache().items.has(id))`);
+      // 2つ目のタブは再読込を押さず、通常の自動更新のsinceとfullを記録する。
+      await viewer.evaluate(`(() => {
+        spmTest.removeLists=[];
+        const original=window.fetch;
+        window.fetch=function(input,init) {
+          let body; try { body=JSON.parse(init?.body); } catch {}
+          return original.apply(this,arguments).then(async response=>{
+            if(body?.a==='list') { const reply=await response.clone().json(); spmTest.removeLists.push({since:body.since,full:reply.full,ids:(reply.items||[]).map(p=>p.id)}); }
+            return response;
+          });
+        };
+      })()`);
+      async function absentFromViews(page, items) {
+        await page.bringToFront();
+        const ids = items.map(p => p.id), pids = items.map(p => p.pid);
+        await page.wait(`${JSON.stringify(ids)}.every(id=>!SPM.admin.cache().items.has(id))`, { timeout: 15000 });
+        assert.equal(await page.evaluate(`${JSON.stringify(ids)}.every(id=>!SPM.admin.cache().thumbs.has(id) && !SPM.admin.state.photos.has(SPM.admin.state.d+':'+id))`), true);
+        assert.equal(await page.evaluate(`${activeCluster}.getLayers().every(m=>!${JSON.stringify(pids)}.includes(m.spmPid))`), true, '地図から消える');
+        await click(page, 'タイル');
+        for (const item of items) {
+          const row = saved.find(r => r['写真ID'] === item.id);
+          assert.equal(await page.evaluate(`Array.from(document.querySelectorAll('#tiles-view .tile strong')).some(n=>n.textContent===${JSON.stringify('No.' + row['受付番号'] + '-' + row['何枚目'])})`), false);
+          assert.equal(await page.evaluate(`Array.from(document.querySelectorAll('.recent-item strong')).some(n=>n.textContent.replace(/^NEW /,'').startsWith(${JSON.stringify('No.' + row['受付番号'] + ' ')}))`), false, '新着から消える');
+        }
+        await click(page, '一覧');
+        for (const item of items) {
+          const row = saved.find(r => r['写真ID'] === item.id);
+          assert.equal(await page.evaluate(`!!${text('No.' + row['受付番号'], q('#list-view'))}`), false);
+        }
+      }
+      async function absentFromServer(items) {
+        const snapshot = await state(), remaining = rows(snapshot);
+        const [thumbHeads, ...thumbs] = snapshot.sheets['サムネ_' + originalId].data;
+        for (const item of items) {
+          const row = saved.find(r => r['写真ID'] === item.id);
+          assert.equal(remaining.some(r => r['写真ID'] === item.id), false);
+          assert.equal(thumbs.some(r => r[thumbHeads.indexOf('写真ID')] === item.id), false);
+          assert.equal(snapshot.drive.files.find(f => f.id === row['写真ファイルID']).trashed, true);
+        }
+      }
+      await admin.bringToFront(); await click(admin, '一覧'); await click(admin, 'No.' + chosen.no, q('#list-view'));
+      await click(admin, 'この写真を削除', dialog);
+      assert.equal(await admin.evaluate(`${dialog}.textContent.includes(${JSON.stringify('No.' + chosen.no)}) && ${dialog}.textContent.includes('写真・動画 1件') && ${dialog}.textContent.includes('30日以内')`), true);
+      assert.equal(await admin.evaluate(`${text('削除する', dialog)}.classList.contains('danger')`), true);
+      await click(admin, 'やめる', dialog); await admin.wait(`!!${text('この写真を削除', dialog)}`);
+      assert.equal(rows(await state()).length, baseline + 3);
+      await click(admin, 'この写真を削除', dialog); await click(admin, '削除する', dialog);
+      await admin.wait(`!${dialog}`); await absentFromViews(admin, [created[0]]); await absentFromServer([created[0]]);
+      await absentFromViews(viewer, [created[0]]);
+      assert.equal(await viewer.evaluate(`spmTest.removeLists.some(r=>r.since>0 && r.full===true && !r.ids.includes(${JSON.stringify(created[0].id)}))`), true, '2つ目の管理タブがfullで入れ替える');
+      await admin.bringToFront(); await click(admin, '一覧');
+      for (const item of created.slice(1)) {
+        const no = saved.find(r => r['写真ID'] === item.id)['受付番号'];
+        await admin.click(`Array.from(document.querySelectorAll('#list-view label')).find(n=>n.textContent===${JSON.stringify('No.' + no + 'を選ぶ')}).querySelector('input')`);
+      }
+      await click(admin, '選んだ投稿を削除（2件）');
+      assert.equal(await admin.evaluate(`${dialog}.textContent.includes('写真・動画 2件')`), true);
+      await click(admin, '削除する', dialog); await admin.wait(`!${dialog}`);
+      await absentFromViews(admin, created); await absentFromServer(created);
+      await absentFromViews(viewer, created);
+      assert.equal(await viewer.evaluate(`spmTest.removeLists.filter(r=>r.since>0 && r.full===true).length>=2`), true);
+      assert.equal(rows(await state()).length, baseline);
+      assert.equal(await admin.evaluate('SPM.admin.state.selected.size'), 0);
+      assert.equal(await admin.evaluate('SPM.admin.groups().length'), new Set(rows(await state()).map(r => r['まとまりID'])).size);
+    } finally { try { await viewer.close(); } finally { await admin.bringToFront(); } }
+  });
   await check('管理5 受付停止・合言葉の変更・再開・訓練・過去・共有', async () => {
     await admin.bringToFront();
     // localhostでは公開URLを自動保存しないため、共有の対象だけを偽設定へ入れる。

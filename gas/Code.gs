@@ -2,7 +2,7 @@
 // この画面の「実行」は使いません。スプレッドシートを開き直し、
 // 上のメニュー「災害写真マップ」→「①最初の設定」から操作してください。
 // 直したら「デプロイを管理 → 編集 → 新しいバージョン」で公開し直してください。
-var APP_VERSION = '1.1.1';
+var APP_VERSION = '1.2.0';
 var VIDEO_CHUNK_BYTES = 2 * 1024 * 1024;
 var VIDEO_TYPES = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp', 'video/x-m4v': '.m4v' };
 var TZ = 'Asia/Tokyo';
@@ -13,7 +13,7 @@ var PROP = {
 };
 var DISASTER_FIELDS = {
   id: '災害ID', kind: '種別', name: '災害名', start: '開始日時', end: '終了日時', state: '状態',
-  folderId: '写真フォルダID', lastNo: '最後の受付番号', posts: '投稿数', photos: '写真枚数', memo: 'メモ'
+  folderId: '写真フォルダID', lastNo: '最後の受付番号', posts: '投稿数', photos: '写真枚数', memo: 'メモ', lastDeleteRev: '最後の削除の更新番号'
 };
 var PHOTO_FIELDS = {
   no: '受付番号', n: '何枚目', of: '枚数', at: '受付日時', shot: '撮影日時', id: '写真ID', pid: 'まとまりID',
@@ -111,7 +111,14 @@ function records_(sheet, fields) {
   }).filter(function (obj) { return obj.id !== ''; });
 }
 // スクリプトロックの中で呼ぶ。印は移行がすべて済んだときだけ残す。
+function ensureDisasterHeaders_() {
+  var key = 'spm:disasterHeads:' + APP_VERSION;
+  if (cache_().get(key)) return;
+  ensureSheet_('災害一覧', DISASTER_FIELDS);
+  cache_().put(key, '1', 21600);
+}
 function ensurePostHeaders_(d) {
+  ensureDisasterHeaders_();
   var key = 'spm:heads:' + d.id + ':' + APP_VERSION;
   if (cache_().get(key)) return;
   var sheet = ensureSheet_('投稿_' + d.id, PHOTO_FIELDS);
@@ -383,6 +390,7 @@ function doPost(e) {
       case 'login': return login_(data);
       case 'state': return state_(data);
       case 'list': return list_(data);
+      case 'remove': return remove_(data);
       case 'photo': return photo_(data);
       case 'media': return media_(data);
       case 'update': return update_(data);
@@ -660,22 +668,62 @@ function list_(data) {
   var d = knownDisaster_(cfg, data.d); if (!d) return fail_('notfound');
   var since = data.since === undefined ? 0 : Number(data.since);
   if (!Number.isInteger(since) || since < 0) return fail_('bad', '新着を確認できませんでした。「↻ 全部読み直す」を押してください。');
-  if (!cache_().get('spm:heads:' + d.id + ':' + APP_VERSION)) {
-    var lock = LockService.getScriptLock();
-    try { lock.waitLock(20000); } catch (e) { return fail_('busy'); }
-    try {
-      if (!adminAuthorized_(data, { props: readLockedProps_() })) return fail_('auth');
-      ensurePostHeaders_(d);
-    }
-    finally { lock.releaseLock(); }
-  }
   var storedRev = cache_().get('spm:rev'), rev = Number(storedRev === null ? readProps_()[PROP.REV] || 0 : storedRev);
   if (storedRev === null) cache_().put('spm:rev', String(rev), 21600);
-  if (since > 0 && rev <= since) return { ok: true, rev: rev, items: [], thumbs: {} };
-  var items = records_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS).filter(function (r) { return since === 0 || Number(r.rev) > since; }).map(publicItem_);
-  var wanted = {}, thumbs = {}; items.forEach(function (r) { wanted[r.id] = true; });
-  if (items.length) records_(spreadsheet_().getSheetByName('サムネ_' + data.d), THUMB_FIELDS).forEach(function (r) { if (wanted[r.id]) thumbs[r.id] = r.thumb; });
-  return { ok: true, rev: rev, disaster: publicDisaster_(d), items: items, thumbs: thumbs, serverTime: dateText_() };
+  if (since > 0 && rev <= since && cache_().get('spm:heads:' + d.id + ':' + APP_VERSION) && cache_().get('spm:disasterHeads:' + APP_VERSION)) return { ok: true, rev: rev, items: [], thumbs: {} };
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return fail_('busy'); }
+  try {
+    if (!adminAuthorized_(data, { props: readLockedProps_() })) return fail_('auth');
+    ensurePostHeaders_(d);
+    // 削除後は設定キャッシュが消えるので、ロック待ち中の削除も反映する。
+    // 削除番号は設定の写しから取り、災害一覧を直接読み直さない。
+    d = knownDisaster_(getConfig_(), data.d);
+    if (!d) return fail_('notfound');
+    rev = Number(cache_().get('spm:rev') || readProps_()[PROP.REV] || 0);
+    var full = since < Number(d.lastDeleteRev || 0);
+    var items = records_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS).filter(function (r) { return full || since === 0 || Number(r.rev) > since; }).map(publicItem_);
+    var wanted = {}, thumbs = {}; items.forEach(function (r) { wanted[r.id] = true; });
+    if (items.length) records_(spreadsheet_().getSheetByName('サムネ_' + data.d), THUMB_FIELDS).forEach(function (r) { if (wanted[r.id]) thumbs[r.id] = r.thumb; });
+    var reply = { ok: true, rev: rev, disaster: publicDisaster_(d), items: items, thumbs: thumbs, serverTime: dateText_() };
+    if (full) reply.full = true;
+    return reply;
+  } finally { lock.releaseLock(); }
+}
+function remove_(data) {
+  var cfg = getConfig_(); if (!adminAuthorized_(data, cfg)) return fail_('auth');
+  if (!knownDisaster_(cfg, data.d)) return fail_('notfound');
+  if (!Array.isArray(data.ids) || !data.ids.length || data.ids.length > 200 || !data.ids.every(uuidValid_)) return fail_('bad', '削除する写真・動画を1〜200件で選んでください。');
+  var wanted = new Set(data.ids), files = [];
+  var reply = mutation_(function () {
+    var d = disaster_(data.d); if (!d) return fail_('notfound');
+    if (!adminAuthorized_(data, { props: readLockedProps_() })) return fail_('auth');
+    ensurePostHeaders_(d);
+    var sheet = spreadsheet_().getSheetByName('投稿_' + data.d), all = records_(sheet, PHOTO_FIELDS);
+    var removed = all.filter(function (r) { return wanted.has(r.id); });
+    if (!removed.length) return { ok: true, removed: 0, rev: Number(readProps_()[PROP.REV] || 0) };
+    var ids = new Set(removed.map(function (r) { return r.id; }));
+    var thumbSheet = spreadsheet_().getSheetByName('サムネ_' + data.d);
+    removed.slice().sort(function (a, b) { return b.row - a.row; }).forEach(function (r) { sheet.deleteRow(r.row); });
+    records_(thumbSheet, THUMB_FIELDS).filter(function (r) { return ids.has(r.id); }).sort(function (a, b) { return b.row - a.row; }).forEach(function (r) { thumbSheet.deleteRow(r.row); });
+    var remaining = all.filter(function (r) { return !ids.has(r.id); }), rev = nextRev_();
+    writeRecord_(spreadsheet_().getSheetByName('災害一覧'), DISASTER_FIELDS, d.row, {
+      posts: new Set(remaining.map(function (r) { return r.pid; })).size, photos: remaining.length, lastDeleteRev: rev
+    });
+    var counts = new Map();
+    removed.forEach(function (r) {
+      files.push(r.fileId);
+      if (!counts.has(r.no)) counts.set(r.no, { photo: 0, video: 0 });
+      counts.get(r.no)[r.kind === '動画' ? 'video' : 'photo']++;
+    });
+    counts.forEach(function (n, no) { log_('削除', 'No.' + no + '（写真' + n.photo + '・動画' + n.video + '）を削除', '管理画面'); });
+    return { ok: true, removed: removed.length, rev: rev };
+  }, '管理画面');
+  // ドライブへの操作はロックを解いてから。失敗しても残りのファイルは処理する。
+  var failed = false;
+  files.forEach(function (id) { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) { failed = true; } });
+  if (failed) { log_('エラー', '削除した記録の一部のファイルをゴミ箱へ移せませんでした。', '管理画面'); reply.message = '記録を削除しましたが、一部のファイルをゴミ箱へ移せませんでした。管理担当者がドライブを確認してください。'; }
+  return reply;
 }
 function photo_(data) {
   var cfg = getConfig_(); if (!adminAuthorized_(data, cfg)) return fail_('auth');
@@ -875,4 +923,4 @@ function dlgAdminPass(pass) { return setAdminPass_(pass, 'メニュー'); }
 function dlgUnlock() { return unlock_('メニュー'); }
 function dlgSetupHome(text) { var point = parseLocationText_(text); return !String(text || '').trim() ? { ok: true } : point && point.lat !== undefined ? setMapHome_(point.lat, point.lng, 13, 'メニュー') : fail_('bad', '地図の座標を読み取れませんでした。'); }
 
-var SPM_CODE_END = '1.1.1';
+var SPM_CODE_END = '1.2.0';

@@ -60,12 +60,13 @@
   function render(posts) {
     if (!map) return;
     shown = new Map(posts.map(function (p) { return [p.pid, p]; }));
+    pendingRipples.forEach(function (pid) { if (!shown.has(pid)) pendingRipples.delete(pid); });
     if (edit && !shown.has(edit.pid)) cancelEdit();
     var wanted = new Set(posts.filter(located).map(function (p) { return p.pid; }));
     markers.forEach(function (marker, pid) { if (!wanted.has(pid) && (!edit || edit.pid !== pid)) { cluster.removeLayer(marker); markers.delete(pid); } });
     posts.filter(located).forEach(function (p) {
       if (edit && edit.pid === p.pid) return;
-      var marker = markers.get(p.pid), preview = thumb(p), signature = JSON.stringify([p.lat, p.lng, p.cat, color(p.cat), p.urgent, p.hidden, p.status, p.photos.length, p.photos[0].kind, p.photos[0].duration, S.admin.state.unread.has(S.admin.state.d + ':' + p.pid)]);
+      var marker = markers.get(p.pid), preview = thumb(p), signature = JSON.stringify([p.lat, p.lng, p.cat, color(p.cat), p.urgent, p.hidden, p.status, p.photos.length, p.photos[0].id, p.photos[0].kind, p.photos[0].duration, S.admin.state.unread.has(S.admin.state.d + ':' + p.pid)]);
       if (!marker) {
         marker = root.L.marker([p.lat, p.lng], { icon: icon(p), title: 'No.' + p.no + ' ' + p.cat + ' ' + p.status + (p.urgent ? ' 至急' : ''), keyboard: true, zIndexOffset: p.urgent ? 500 : 0 }); marker.spmPid = p.pid;
         marker.on('mouseover mouseout', function (event) { this.spmHovered = event.type === 'mouseover'; updateMarkerOrder(this); });

@@ -34,6 +34,7 @@ function rows(gas, name) {
 function liveFiles(gas) { return [...gas.drive.files.values()].filter(file => !file.isTrashed()); }
 function list(env, d = env.d, since = 0) { return env.gas.doPost({ a: 'list', token: env.adminToken, d, since }); }
 function config(env, data) { return env.gas.doPost({ a: 'config', token: env.adminToken, ...data }); }
+function remove(env, ids, d = env.d) { return env.gas.doPost({ a: 'remove', token: env.adminToken, d, ids }); }
 function update(env, pid, patch, d = env.d) { return env.gas.doPost({ a: 'update', token: env.adminToken, d, pid, patch }); }
 function changeSetting(gas, name, value) {
   const sheet = gas.sheets.get('設定'), index = sheet.data.findIndex(row => row[7] === name);
@@ -65,7 +66,7 @@ test('1 最初の設定は3回でも同じシート・フォルダ・認証情�
 test('2 pingは版・受付状態・種別を返し、停止中のhelloは先にclosedを返す', () => {
   const gas = createGas(); gas.call('setup_');
   const P = gas.context.PROP, code = gas.props.getProperty(P.POST_CODE), ping = gas.doGet({ a: 'ping' });
-  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.1.1', codeComplete: true, accepting: false, codeKind: 'digits' });
+  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.2.0', codeComplete: true, accepting: false, codeKind: 'digits' });
   assertError(gas.doPost({ a: 'hello', code }), 'closed');
   assertError(gas.doPost({ a: 'hello', code: uuid(gas) }), 'closed');
   assert.equal(gas.cache.get('spm:fail:post'), null);
@@ -720,6 +721,99 @@ test('28 旧行の空欄は写真、追加列の補充・並べ替えと旧設�
   const sent = completeVideo(env); assert.equal(list(env).items.find(r => r.id === sent.data.id).kind, 'video');
   assert.equal(rows(gas, '投稿_' + env.d)[1]['種類'], '動画');
   changeSetting(gas, '動画1本の上限（MB）', 7); gas.call('setup_'); assert.equal(gas.doPost({ a: 'state', token: env.adminToken }).settings.limits.videoMaxMB, 7);
+});
+
+test('削除：1件だけ消し、残りのまとまりと行・サムネ・ファイル・集計・記録を更新する', () => {
+  const env = prepared(), { gas } = env, first = payload(env, { of: 2 });
+  const second = payload(env, { pid: first.pid, n: 2, of: 2 }), other = payload(env);
+  for (const data of [first, second, other]) assert.equal(gas.doPost(data).ok, true);
+  const before = list(env), file = gas.drive.files.get(before.items.find(r => r.id === first.id).fileId);
+  // 行を消すのはロック内、ドライブのゴミ箱移動はロック外。
+  for (const sheet of [gas.sheets.get('投稿_' + env.d), gas.sheets.get('サムネ_' + env.d)]) {
+    const original = sheet.deleteRow;
+    sheet.deleteRow = row => { assert.equal(gas.control.lockHeld, true); return original(row); };
+  }
+  const originalTrash = file.setTrashed;
+  file.setTrashed = value => { assert.equal(gas.control.lockHeld, false); return originalTrash(value); };
+  const reply = remove(env, [first.id]);
+  assert.equal(reply.ok, true); assert.equal(reply.removed, 1); assert.ok(reply.rev > before.rev);
+  assert.deepEqual(rows(gas, '投稿_' + env.d).map(r => r['写真ID']), [second.id, other.id]);
+  assert.deepEqual(rows(gas, 'サムネ_' + env.d).map(r => r['写真ID']), [second.id, other.id]);
+  assert.equal(file.isTrashed(), true); assert.equal(liveFiles(gas).length, 2);
+  const d = rows(gas, '災害一覧')[0];
+  assert.equal(d['投稿数'], 2); assert.equal(d['写真枚数'], 2); assert.equal(d['最後の受付番号'], 2);
+  assert.equal(d['最後の削除の更新番号'], reply.rev);
+  assert.deepEqual(rows(gas, '記録').filter(r => r['種類'] === '削除').map(r => [r['内容'], r['どこから']]), [['No.1（写真1・動画0）を削除', '管理画面']]);
+  assertError(gas.doPost({ a: 'photo', token: env.adminToken, d: env.d, id: first.id }), 'notfound');
+});
+
+test('削除：写真と動画のまとまりを全削除し、別の複数投稿も消せる', () => {
+  const env = prepared(), { gas } = env, first = payload(env, { of: 3 });
+  const second = payload(env, { pid: first.pid, n: 2, of: 3 });
+  for (const data of [first, second]) assert.equal(gas.doPost(data).ok, true);
+  const video = completeVideo(env, videoPayload(env, { pid: first.pid, n: 3, of: 3, size: 17 })).data;
+  const others = [payload(env), payload(env)]; others.forEach(data => assert.equal(gas.doPost(data).ok, true));
+  const initial = list(env), grouped = [first.id, second.id, video.id];
+  assert.equal(remove(env, grouped).removed, 3);
+  const remaining = list(env); assert.equal(remaining.full, true); assert.equal(remaining.items.length, 2);
+  let d = rows(gas, '災害一覧')[0]; assert.equal(d['投稿数'], 2); assert.equal(d['写真枚数'], 2);
+  assert.equal(rows(gas, '記録').filter(r => r['種類'] === '削除')[0]['内容'], 'No.1（写真2・動画1）を削除');
+  assert.equal(remove(env, others.map(r => r.id)).removed, 2);
+  d = rows(gas, '災害一覧')[0]; assert.equal(d['投稿数'], 0); assert.equal(d['写真枚数'], 0);
+  assert.equal(rows(gas, '投稿_' + env.d).length, 0); assert.equal(rows(gas, 'サムネ_' + env.d).length, 0);
+  assert.equal(rows(gas, '記録').filter(r => r['種類'] === '削除').length, 3);
+  for (const item of initial.items) assert.equal(gas.drive.files.get(item.fileId).isTrashed(), true);
+  const empty = list(env, env.d, initial.rev); assert.equal(empty.full, true); assert.deepEqual(empty.items, []); assert.deepEqual(empty.thumbs, {});
+});
+
+test('削除：古いsinceは残り全件、新しいsinceは差分。別の災害の削除は混ざらない', () => {
+  const env = prepared(), { gas } = env, photos = [payload(env), payload(env), payload(env)];
+  photos.forEach(data => gas.doPost(data)); const before = list(env);
+  const deleted = remove(env, [photos[0].id]), full = list(env, env.d, before.rev);
+  assert.equal(full.full, true); assert.equal(full.rev, deleted.rev);
+  assert.deepEqual(full.items.map(r => r.id), photos.slice(1).map(r => r.id));
+  assert.deepEqual(Object.keys(full.thumbs), photos.slice(1).map(r => r.id));
+  const same = list(env, env.d, deleted.rev); assert.notEqual(same.full, true); assert.deepEqual(same.items, []);
+  assert.equal(update(env, photos[1].pid, { memo: '残りを確認' }).ok, true);
+  const diff = list(env, env.d, deleted.rev); assert.notEqual(diff.full, true);
+  assert.deepEqual(diff.items.map(r => r.id), [photos[1].id]);
+  assert.deepEqual(list(env, env.d, deleted.rev - 1).items.map(r => r.id), photos.slice(1).map(r => r.id));
+  const next = gas.call('startDisaster_', '訓練', '別の訓練', 'メニュー').id;
+  assert.notEqual(list(env, next, before.rev).full, true);
+  assert.equal(remove(env, [photos[2].id], next).removed, 0);
+  assert.equal(list(env).items.length, 2);
+  assert.equal(remove(env, [photos[2].id]).removed, 1); // 過去の災害も削除できる。
+});
+
+test('削除：認証・200件上限・入力・ロック競合を検査し、無いIDと重複を無視する', () => {
+  const env = prepared(), { gas } = env, data = payload(env); gas.doPost(data);
+  for (const token of [undefined, env.postToken]) assertError(gas.doPost({ a: 'remove', token, d: env.d, ids: [data.id] }), 'auth');
+  for (const ids of [undefined, [], '不正', ['不正'], [null], Array.from({ length: 201 }, () => uuid(gas))]) assertError(remove(env, ids), 'bad');
+  assertError(remove(env, [data.id], '無い災害'), 'notfound');
+  gas.control.lockAvailable = false; assertError(remove(env, [data.id]), 'busy'); gas.control.lockAvailable = true;
+  assert.equal(liveFiles(gas).length, 1); assert.equal(list(env).items.length, 1);
+  const before = list(env).rev, logs = rows(gas, '記録').length;
+  assert.deepEqual(remove(env, [uuid(gas)]), { ok: true, removed: 0, rev: before });
+  assert.equal(rows(gas, '記録').length, logs);
+  const reply = remove(env, [data.id, data.id, uuid(gas)]); assert.equal(reply.removed, 1);
+  assert.deepEqual(remove(env, [data.id]), { ok: true, removed: 0, rev: reply.rev });
+  const last = payload(env); gas.doPost(last);
+  gas.control.onWaitLock = () => gas.call('setAdminPass_', null, 'メニュー');
+  assertError(remove(env, [last.id]), 'auth'); assert.equal(rows(gas, '投稿_' + env.d).length, 1);
+});
+
+test('削除：旧災害一覧の不足列をlistとremoveで補い、見出しの並べ替えにも対応する', () => {
+  for (const action of ['list', 'remove']) {
+    const env = prepared(), { gas } = env, data = payload(env); gas.doPost(data);
+    const sheet = gas.sheets.get('災害一覧'); sheet.deleteColumn(sheet.data[0].indexOf('最後の削除の更新番号') + 1);
+    sheet.data.forEach(row => row.reverse());
+    gas.cache.remove('spm:disasterHeads:' + gas.context.APP_VERSION); gas.call('invalidateConfig_');
+    const reply = action === 'list' ? list(env) : remove(env, [data.id]); assert.equal(reply.ok, true);
+    assert.equal(sheet.data[0].at(-1), '最後の削除の更新番号');
+    if (action === 'list') assert.equal(remove(env, [data.id]).removed, 1);
+    assert.equal(rows(gas, '災害一覧')[0]['投稿数'], 0); assert.equal(rows(gas, '災害一覧')[0]['写真枚数'], 0);
+    assert.ok(rows(gas, '災害一覧')[0]['最後の削除の更新番号'] > 0); assert.equal(sheet.formulas.size, 0);
+  }
 });
 
 test('29 最初の関数は案内だけで状態を変えず、エディタでのメニュー実行も案内で終わる', () => {
