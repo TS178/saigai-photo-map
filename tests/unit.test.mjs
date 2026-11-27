@@ -16,6 +16,20 @@ function modules(extra = {}) {
 const S = modules();
 const plain = value => JSON.parse(JSON.stringify(value));
 
+test('util：利用者向けエラーは日本語を保ち、英語だけなら予備の文と記録に分ける', () => {
+  const logged = [], util = modules({ console: { error: value => logged.push(value) } }).util;
+  const fallback = '読み込めませんでした。もう一度お試しください。';
+  for (const message of ['保存できませんでした。', 'エラー', '失敗', '通信エラー (NetworkError)', 'ｶﾀｶﾅ']) {
+    assert.equal(util.userMessage(new Error(message), fallback), message);
+  }
+  assert.equal(logged.length, 0);
+  for (const error of [new Error('The source image cannot be decoded.'), new Error('Failed to fetch'), new Error(''), {}, null, undefined, 'NetworkError']) {
+    const before = logged.length;
+    assert.equal(util.userMessage(error, fallback), fallback);
+    assert.equal(logged.length, before + 1); assert.equal(logged.at(-1), error);
+  }
+});
+
 test('動画：長さ・進み具合・形式の表示と上限超過はDOMなしで扱える', async () => {
   for (const [value, expected] of [[0, '0:00'], [24.9, '0:24'], [60, '1:00'], [3723, '62:03'], [null, ''], [undefined, ''], [-1, ''], [Infinity, ''], [NaN, '']]) assert.equal(S.video.formatDuration(value), expected);
   assert.equal(S.video.progressText(12 * 1024 * 1024, 4 * 1024 * 1024), '動画 12MB 中 4MB');

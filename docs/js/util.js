@@ -10,6 +10,12 @@
     return h.slice(0, 8) + '-' + h.slice(8, 12) + '-' + h.slice(12, 16) + '-' + h.slice(16, 20) + '-' + h.slice(20);
   }
   function text(s) { return s === null || s === undefined ? '' : String(s); }
+  function userMessage(e, fallback) {
+    var message = e && typeof e.message === 'string' ? e.message : '';
+    if (/[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff\uf900-\ufaff\uff66-\uff9d]/.test(message)) return message;
+    if (root.console && root.console.error) root.console.error(e);
+    return fallback;
+  }
   function toHalfWidth(s) { return text(s).normalize('NFKC'); }
   function normCode(s) { return toHalfWidth(s).replace(/[\s\-‐‑‒–—―−ーｰ]/g, '').toLowerCase(); }
   function formatCode(s) { s = normCode(s); return /^\d{8}$/.test(s) ? s.slice(0, 4) + '-' + s.slice(4) : s; }
@@ -36,5 +42,5 @@
     return 6371000 * 2 * Math.atan2(Math.sqrt(h), Math.sqrt(Math.max(0, 1 - h)));
   }
   function safeFileName(s, max) { return Array.from(text(s).replace(/[\\/:*?"<>|\s\u0000-\u001f]/g, '_')).slice(0, max || 80).join('') || '写真'; }
-  root.SPM.util = { uuid: uuid, formatJst: formatJst, toHalfWidth: toHalfWidth, normCode: normCode, formatCode: formatCode, readCode: readCode, clampText: clampText, deviceKind: deviceKind, distanceMeters: distanceMeters, safeFileName: safeFileName };
+  root.SPM.util = { userMessage: userMessage, uuid: uuid, formatJst: formatJst, toHalfWidth: toHalfWidth, normCode: normCode, formatCode: formatCode, readCode: readCode, clampText: clampText, deviceKind: deviceKind, distanceMeters: distanceMeters, safeFileName: safeFileName };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -5,7 +5,7 @@ import crypto from 'node:crypto';
 // kabu-weather/tests/lib/gas-mock.mjs の vm・プロパティ・模擬通信を基に拡張。
 // 通信・ドライブ・シートはすべてメモリ内。実際のサービスには接続しない。
 export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z'), urlRoutes = [], source } = {}) {
-  const counters = { propReads: 0, propWrites: 0, sheetReads: 0, sheetWrites: 0, fetches: 0 };
+  const counters = { propReads: 0, propWrites: 0, sheetReads: 0, sheetWrites: 0, fetches: 0, folderReads: 0 };
   const control = {
     now: typeof now === 'string' ? Date.parse(now) : now,
     lockAvailable: true, lockHeld: false, released: 0, onWaitLock: null, onCreateFile: null, uiAvailable: true,
@@ -119,6 +119,17 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
       getRange: (r, c, nr = 1, nc = 1) => range(sheet, r, c, nr, nc),
       getDataRange: () => range(sheet, 1, 1, Math.max(1, sheet.getLastRow()), Math.max(1, sheet.getLastColumn())),
       appendRow(row) { range(sheet, sheet.getLastRow() + 1, 1, 1, row.length).setValues([row]); return sheet; },
+      // 旧版の列構成を再現する試験用。数式の列番号も移す。
+      deleteColumn(column) {
+        if (!Number.isInteger(column) || column < 1 || column > sheet.getLastColumn()) throw new Error('削除する列が不正です。');
+        sheet.data.forEach(row => row.splice(column - 1, 1));
+        const formulas = new Map();
+        for (const [key, value] of sheet.formulas) {
+          const [r, c] = key.split(':').map(Number);
+          if (c !== column) formulas.set(r + ':' + (c > column ? c - 1 : c), value);
+        }
+        sheet.formulas = formulas; counters.sheetWrites++; return sheet;
+      },
       setFrozenRows(n) { sheet.frozenRows = n; return sheet; },
       hideSheet() { sheet.hidden = true; return sheet; },
       isSheetHidden: () => sheet.hidden,
@@ -164,6 +175,12 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
     const result = {
       id, name, parent, children: [], fileIds: [],
       getId: () => id, getName: () => name, getUrl: () => 'https://drive.google.com/drive/folders/' + id,
+      getFiles() {
+        counters.folderReads++;
+        const files = result.fileIds.map(fileId => drive.files.get(fileId)).filter(file => !file.isTrashed());
+        let index = 0;
+        return { hasNext: () => index < files.length, next: () => files[index++] };
+      },
       createFolder(childName) { const child = folder(String(childName), id); result.children.push(child.getId()); return child; },
       createFile(data) {
         const fileId = 'file-' + crypto.randomUUID(); let fileName = data.getName(), trashed = false;

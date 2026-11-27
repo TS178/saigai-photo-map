@@ -65,7 +65,7 @@ test('1 最初の設定は3回でも同じシート・フォルダ・認証情�
 test('2 pingは版・受付状態・種別を返し、停止中のhelloは先にclosedを返す', () => {
   const gas = createGas(); gas.call('setup_');
   const P = gas.context.PROP, code = gas.props.getProperty(P.POST_CODE), ping = gas.doGet({ a: 'ping' });
-  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.1.0', codeComplete: true, accepting: false, codeKind: 'digits' });
+  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.1.1', codeComplete: true, accepting: false, codeKind: 'digits' });
   assertError(gas.doPost({ a: 'hello', code }), 'closed');
   assertError(gas.doPost({ a: 'hello', code: uuid(gas) }), 'closed');
   assert.equal(gas.cache.get('spm:fail:post'), null);
@@ -461,6 +461,102 @@ function completeVideo(env, data = videoPayload(env)) {
 }
 function videoSession(gas, id) { return JSON.parse(gas.cache.get('spm:vid:' + id)); }
 
+function legacyPostSheet(env) {
+  const sheet = env.gas.sheets.get('投稿_' + env.d);
+  for (const head of ['種類', '長さ(秒)', '大きさ(MB)']) {
+    const index = sheet.data[0].indexOf(head);
+    if (index >= 0) sheet.deleteColumn(index + 1);
+  }
+  env.gas.cache.remove('spm:heads:' + env.d + ':' + env.gas.context.APP_VERSION);
+  return sheet;
+}
+
+test('旧シート：1.0.0の見出しへ動画を送ると不足列を補い、動画として一覧に返す', () => {
+  const env = prepared(), sheet = legacyPostSheet(env);
+  assert.equal(sheet.data[0].includes('種類'), false);
+  const { data } = completeVideo(env, videoPayload(env, { mime: 'video/webm' }));
+  assert.deepEqual(sheet.data[0].slice(-3), ['種類', '長さ(秒)', '大きさ(MB)']);
+  const row = rows(env.gas, '投稿_' + env.d)[0];
+  assert.equal(row['種類'], '動画'); assert.equal(row['長さ(秒)'], data.duration);
+  assert.equal(row['大きさ(MB)'], data.size / (1024 * 1024));
+  const item = list(env).items[0]; assert.equal(item.id, data.id); assert.equal(item.kind, 'video');
+});
+
+test('旧シート：写真投稿と管理更新でもロック中に不足列を補う', () => {
+  const env = prepared(), { gas } = env, sheet = legacyPostSheet(env), photo = payload(env);
+  assert.equal(gas.doPost(photo).ok, true);
+  assert.equal(rows(gas, '投稿_' + env.d)[0]['種類'], '写真');
+  legacyPostSheet(env);
+  const writes = sheet.writes.length;
+  assert.equal(update(env, photo.pid, { memo: '=確認' }).ok, true);
+  assert.deepEqual(sheet.data[0].slice(-3), ['種類', '長さ(秒)', '大きさ(MB)']);
+  assert.equal(rows(gas, '投稿_' + env.d)[0]['対応メモ'], '=確認');
+  assert.ok(sheet.writes.slice(writes).some(w => w.row === 1));
+  assert.equal(sheet.formulas.size, 0);
+});
+
+test('旧シート：一覧の補完はロックが取れた場合だけ行い、写真は実際のMIMEを返す', () => {
+  const env = prepared(), { gas } = env, photo = payload(env); gas.doPost(photo);
+  const sheet = legacyPostSheet(env), before = gas.counters.sheetWrites;
+  gas.control.lockAvailable = false;
+  assertError(list(env), 'busy'); assert.equal(gas.counters.sheetWrites, before);
+  assert.equal(sheet.data[0].includes('種類'), false);
+  assert.equal(gas.cache.get('spm:heads:' + env.d + ':' + gas.context.APP_VERSION), null);
+  gas.control.lockAvailable = true;
+  assert.equal(list(env).ok, true);
+  const folder = gas.drive.folders.get(rows(gas, '災害一覧')[0]['写真フォルダID']);
+  const png = folder.createFile(gas.context.Utilities.newBlob([137, 80, 78, 71], 'image/png', '写真.png'));
+  sheet.getRange(2, sheet.data[0].indexOf('写真ファイルID') + 1).setValue(gas.call('asText_', png.getId()));
+  const reply = gas.doPost({ a: 'photo', token: env.adminToken, d: env.d, id: photo.id });
+  assert.equal(reply.ok, true); assert.equal(reply.mime, 'image/png');
+  assert.deepEqual(Buffer.from(reply.b64, 'base64'), Buffer.from([137, 80, 78, 71]));
+});
+
+for (const missingHeaders of [true, false]) test('旧シート：空の種類を実ファイルから復旧して差分更新する（列なし=' + missingHeaders + '）', () => {
+  const env = prepared(), { gas } = env;
+  const first = payload(env), second = payload(env); gas.doPost(first); gas.doPost(second);
+  const initial = list(env), sheet = gas.sheets.get('投稿_' + env.d);
+  // 1.1.0で誤って写真扱いされた行を、偽ドライブのvideo/webmファイルで再現する。
+  const folder = gas.drive.folders.get(rows(gas, '災害一覧')[0]['写真フォルダID']);
+  const bytes = Buffer.from([1, 2, 3, 4, 5]);
+  const file = folder.createFile(gas.context.Utilities.newBlob([...bytes], 'video/webm', '復旧する動画.webm'));
+  sheet.getRange(2, sheet.data[0].indexOf('写真ファイルID') + 1).setValue(gas.call('asText_', file.getId()));
+  if (missingHeaders) legacyPostSheet(env);
+  else {
+    sheet.getRange(2, sheet.data[0].indexOf('種類') + 1, 2, 1).setValues([[''], ['']]);
+    gas.cache.remove('spm:heads:' + env.d + ':' + gas.context.APP_VERSION);
+  }
+  const photoRequest = { a: 'photo', token: env.adminToken, d: env.d, id: first.id };
+  const rejected = gas.doPost(photoRequest);
+  assertError(rejected, 'video'); assert.equal(rejected.message, '動画です。動画として開きます。');
+  const media = gas.doPost({ ...photoRequest, a: 'media', start: 0, length: 100 });
+  assert.equal(media.ok, true); assert.equal(media.mime, 'video/webm'); assert.deepEqual(Buffer.from(media.b64, 'base64'), bytes);
+  const originalGetFiles = folder.getFiles;
+  folder.getFiles = () => { assert.equal(gas.control.lockHeld, true); return originalGetFiles(); };
+  const folderReads = gas.counters.folderReads;
+  const diff = list(env, env.d, initial.rev);
+  assert.equal(diff.ok, true); assert.ok(diff.rev > initial.rev); assert.equal(diff.items.length, 2);
+  assert.equal(gas.counters.folderReads - folderReads, 1, 'フォルダは1回だけたどる');
+  const video = diff.items.find(r => r.id === first.id), photo = diff.items.find(r => r.id === second.id);
+  assert.equal(video.kind, 'video'); assert.equal(video.sizeMB, bytes.length / (1024 * 1024)); assert.equal(photo.kind, 'photo');
+  for (const item of diff.items) { assert.ok(item.rev > initial.rev); assert.ok(item.updated); }
+  const saved = rows(gas, '投稿_' + env.d);
+  assert.equal(saved[0]['種類'], '動画'); assert.equal(saved[1]['種類'], '写真');
+  assert.equal(saved[0]['大きさ(MB)'], bytes.length / (1024 * 1024));
+  assert.equal(gas.doPost({ ...photoRequest, id: second.id }).mime, 'image/jpeg');
+  assert.equal(gas.cache.get('spm:heads:' + env.d + ':' + gas.context.APP_VERSION), '1');
+  // 2回目以降の差分取得は、見出しを含めシートを一度も読み出さない。
+  for (let i = 0; i < 2; i++) {
+    const reads = gas.counters.sheetReads, writes = gas.counters.sheetWrites;
+    assert.deepEqual(list(env, env.d, diff.rev).items, []);
+    assert.equal(gas.counters.sheetReads, reads); assert.equal(gas.counters.sheetWrites, writes);
+  }
+  const reads = gas.counters.sheetReads;
+  assert.equal(list(env).items.length, 2);
+  assert.equal(gas.counters.sheetReads - reads, 2, '全件取得でも投稿とサムネの2回だけで見出し確認をしない');
+  assert.equal(gas.counters.folderReads - folderReads, 1);
+});
+
 test('20 動画は3塊以上を1本に保存し、写真と通しの受付番号・集計・種類を持つ', () => {
   const env = prepared(), { gas } = env, data = videoPayload(env, { of: 2, note: '=1+1' });
   const bytes = videoBytes(data.size), beforeRev = Number(gas.props.getProperty(gas.context.PROP.REV));
@@ -592,7 +688,7 @@ test('26 mediaは管理認証とRangeで必要な部分だけを返し、photo�
   assert.equal(readMedia({ length: 8 * 1024 * 1024 }).ok, true);
   for (const patch of [{ start: -1 }, { start: 0.5 }, { start: bytes.length }, { length: 0 }, { length: '1' }, { length: 8 * 1024 * 1024 + 1 }, { id: '不明' }]) assertError(readMedia(patch), 'bad');
   assertError(readMedia({ token: env.postToken }), 'auth'); assertError(readMedia({ d: '不明' }), 'notfound'); assertError(readMedia({ id: uuid(gas) }), 'notfound');
-  assertError(gas.doPost({ a: 'photo', token: env.adminToken, d: env.d, id: data.id }), 'bad');
+  assertError(gas.doPost({ a: 'photo', token: env.adminToken, d: env.d, id: data.id }), 'video');
   const photo = payload(env); assert.equal(gas.doPost(photo).ok, true); assertError(readMedia({ id: photo.id }), 'bad');
   gas.drive.files.get(list(env).items.find(r => r.id === data.id).fileId).setTrashed(true); assertError(readMedia(), 'notfound');
 });

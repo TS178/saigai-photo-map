@@ -82,14 +82,14 @@
         input.value = postLink(pageUrl, code, include.checked); link.href = input.value;
         drawQr(canvas, input.value); error.textContent = ''; copy.disabled = save.disabled = false;
         warning.textContent = include.checked ? 'このリンク・QRには合言葉が入っています。職員・消防団の外に出さないでください。' : '合言葉なしのリンク・QRです。投稿するときに合言葉の入力が必要です。';
-      } catch (e) { input.value = ''; link.removeAttribute('href'); canvas.width = canvas.height = 0; error.textContent = e.message; copy.disabled = save.disabled = true; }
+      } catch (e) { input.value = ''; link.removeAttribute('href'); canvas.width = canvas.height = 0; error.textContent = root.SPM.util.userMessage(e, 'リンクとQRを作れませんでした。投稿ページのURLを確認してください。'); copy.disabled = save.disabled = true; }
     }
     include.disabled = !code; include.addEventListener('change', update);
     copy.addEventListener('click', async function () {
       try { await root.navigator.clipboard.writeText(input.value); dom.toast('リンクをコピーしました。'); }
       catch (e) { input.focus(); input.select(); dom.toast('コピーできませんでした。選択されたリンクをCtrl+Cでコピーしてください。'); }
     });
-    save.addEventListener('click', async function () { try { await saveQr(canvas); } catch (e) { error.textContent = e.message; } });
+    save.addEventListener('click', async function () { try { await saveQr(canvas); } catch (e) { error.textContent = root.SPM.util.userMessage(e, 'QRの画像を保存できませんでした。もう一度お試しください。'); } });
     box.append(el('h3', { text: '投稿用リンクとQR' }), el('label', { class: 'check-label' }, [include, '合言葉入り（外すと合言葉なし）']), input, link, warning, canvas, el('div', { class: 'row' }, [copy, save]), error, el('small', { text: 'QRコードは株式会社デンソーウェーブの登録商標です。' }));
     if (!code) box.appendChild(el('p', { text: '現在の合言葉を確認するには、パスワードでログインし直してください。' }));
     update(); return box;

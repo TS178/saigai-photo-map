@@ -8,7 +8,7 @@
   var approvedPoints = new Set(), authVersion = 0, linkUpdates = Promise.resolve(), photoPreview = null;
   function load(key, fallback) { try { var value = root.localStorage.getItem(key); return value === null ? fallback : JSON.parse(value); } catch (e) { return fallback; } }
   function store(key, value) { try { root.localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* 写真はIndexedDBへ別に保存する。 */ } }
-  function action(fn) { return function (event) { Promise.resolve().then(function () { return fn(event); }).catch(function (e) { S.dom.toast(e.message || '処理できませんでした。もう一度お試しください。'); }); }; }
+  function action(fn) { return function (event) { Promise.resolve().then(function () { return fn(event); }).catch(function (e) { S.dom.toast(S.util.userMessage(e, '処理できませんでした。もう一度お試しください。')); }); }; }
   function button(text, fn, secondary) { var node = el('button', { type: 'button', text: text, class: secondary ? 'secondary' : '' }); node.addEventListener('click', action(fn)); return node; }
   function paragraph(text, className) { return el('p', { text: text, class: className || '' }); }
   function link(text, href) { return el('a', { text: text, href: href, target: '_blank', rel: 'noopener' }); }
@@ -18,7 +18,7 @@
   function persist(record) {
     var copy = Object.assign({}, record);
     dirty.set(copy.id, copy);
-    saving = saving.catch(function () {}).then(async function () { await S.outbox.saveDraft(copy); if (dirty.get(copy.id) === copy) dirty.delete(copy.id); }).catch(function (e) { S.dom.toast(e.message); throw e; });
+    saving = saving.catch(function () {}).then(async function () { await S.outbox.saveDraft(copy); if (dirty.get(copy.id) === copy) dirty.delete(copy.id); }).catch(function (e) { S.dom.toast(S.util.userMessage(e, '下書きを保存できませんでした。端末の空き容量を確認してください。')); throw e; });
     // 入力中にPromiseの未処理エラーを作らず、送る直前に失敗を検査する。
     saving.catch(function () {}); return saving;
   }
@@ -157,7 +157,7 @@
         var status = root.document.getElementById('photo-progress'); if (status) status.textContent = video ? '動画を読み取って保存しています…' : (i + 1) + ' / ' + files.length + ' 枚を縮小して保存しています…';
         var selectedPosition = mode === 'field' ? { lat: field.lat, lng: field.lng, acc: field.acc, src: field.src } : null;
         var processed;
-        try { processed = video ? await S.video.process(file, settings && settings.limits && settings.limits.videoMaxMB) : await S.photo.process(file); } catch (e) { S.dom.toast(e.message); continue; }
+        try { processed = video ? await S.video.process(file, settings && settings.limits && settings.limits.videoMaxMB) : await S.photo.process(file); } catch (e) { S.dom.toast(S.util.userMessage(e, '写真・動画を読み取れませんでした。別のファイルをお試しください。')); continue; }
         processed.kind = video ? 'video' : 'photo';
         var previous = list[list.length - 1], values = mode === 'field' ? field : Object.assign(defaults(), previous ? { cat: previous.cat, note: previous.note } : {});
         var record = Object.assign({}, values, processed, { id: S.util.uuid(), mode: importMode, createdAt: Date.now(), order: list.length, disasterId: settings.disaster.id, disasterName: settings.disaster.name });
@@ -274,7 +274,7 @@
       store('spm-code', code); store('spm-settings-code', settingsCode); store('spm-post-settings', settings); announce(''); renderInApp(); await S.outbox.changed();
       if (version !== authVersion) return false;
       navigate('home', true);
-      S.outbox.send().catch(function (e) { S.dom.toast(e.message); }); return true;
+      S.outbox.send().catch(function (e) { S.dom.toast(S.util.userMessage(e, '送信できませんでした。もう一度お試しください。')); }); return true;
     }
     if (reply.error === 'network' && settings && value && value === settingsCode) {
       token = settings.token; announce('通信できません。前回の設定で続けます。写真・動画は送信待ちに保存できます。'); navigate('home', true); return true;
@@ -303,7 +303,7 @@
     sendFooter(); renderPhotoList();
     S.geo.watch(function (point, error) {
       if (point) { if (!manual) updateFieldPosition(point, false); else if (map) map.spm.setCurrent(point, false); }
-      else { var status = root.document.getElementById('gps-status'); if (status) { status.textContent = error.message; status.className = 'error'; } }
+      else { var status = root.document.getElementById('gps-status'); if (status) { status.textContent = S.util.userMessage(error, '現在地を確認できませんでした。場所を指定してください。'); status.className = 'error'; } }
     });
   }
   function renderBatch() {
@@ -383,7 +383,7 @@
       result = { total: list.length, sent: 0, waiting: list.length, nos: [] };
       submitting = false; navigate('sending', true);
       var delivered = [];
-      try { if (!closed) { var outcome = await S.outbox.send(); delivered = outcome.sent; } } catch (e) { S.dom.toast(e.message); }
+      try { if (!closed) { var outcome = await S.outbox.send(); delivered = outcome.sent; } } catch (e) { S.dom.toast(S.util.userMessage(e, '送信できませんでした。もう一度お試しください。')); }
       var history = (await S.outbox.all('history')).filter(function (r) { return ids.has(r.id); });
       var successful = new Map(); history.concat(delivered).forEach(function (r) { if (ids.has(r.id)) successful.set(r.id, r); });
       result.sent = successful.size; result.waiting = list.length - successful.size; result.nos = Array.from(new Set(Array.from(successful.values()).map(function (r) { return r.no; }))).sort(function (a, b) { return a - b; });
@@ -460,7 +460,7 @@
     else if (view === 'place') renderPlace();
     else if (view === 'sending') renderSending();
     else if (view === 'result') renderResult();
-    else if (view === 'queue' || view === 'history') renderRecords(view === 'history').catch(function (e) { S.dom.toast(e.message); });
+    else if (view === 'queue' || view === 'history') renderRecords(view === 'history').catch(function (e) { S.dom.toast(S.util.userMessage(e, '保存した記録を読み込めませんでした。もう一度お試しください。')); });
     else { view = 'home'; render(); return; }
     main.focus(); root.scrollTo(0, 0);
   }
@@ -513,7 +513,7 @@
       if (version !== authVersion) return;
       await refreshReception();
     });
-    linkUpdates.catch(function (e) { announce(e.message || 'リンクを開き直せませんでした。もう一度お試しください。', 'error'); });
+    linkUpdates.catch(function (e) { announce(S.util.userMessage(e, 'リンクを開き直せませんでした。もう一度お試しください。'), 'error'); });
   }
   async function initialize() {
     readLinkCode();
@@ -521,7 +521,7 @@
     if (!S.api.getUrl()) { S.dom.clear(main); heading('設定が済んでいません'); main.appendChild(paragraph('受付の接続先が設定されていません。管理担当の方に確認してください。', 'error')); return; }
     if ('serviceWorker' in root.navigator && (root.location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(root.location.hostname))) root.navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function () { S.dom.toast('オフライン用の保存ができませんでした。通信できる場所でお使いください。'); });
     if (root.navigator.storage && root.navigator.storage.persist) root.navigator.storage.persist().catch(function () {});
-    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(e.message, 'error'); S.dom.clear(main); heading('写真・動画を保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
+    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(S.util.userMessage(e, '保存した記録を読み込めませんでした。空き容量とブラウザの設定を確認してください。'), 'error'); S.dom.clear(main); heading('写真・動画を保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
     S.outbox.start({
       getAuth: function () { return { token: closed ? '' : token, disasterId: settings && settings.disaster.id }; },
       onReply: handleReply,
@@ -553,5 +553,5 @@
     root.addEventListener('beforeunload', function (event) { if (processing) { event.preventDefault(); event.returnValue = ''; } });
   }
   root.SPM.post = { groupRecords: groupRecords };
-  initialize().catch(function (e) { announce(e.message || '起動できませんでした。もう一度開き直してください。', 'error'); });
+  initialize().catch(function (e) { announce(S.util.userMessage(e, '起動できませんでした。もう一度開き直してください。'), 'error'); });
 })(typeof window !== 'undefined' ? window : globalThis);

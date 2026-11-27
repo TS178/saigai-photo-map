@@ -2,7 +2,7 @@
 // この画面の「実行」は使いません。スプレッドシートを開き直し、
 // 上のメニュー「災害写真マップ」→「①最初の設定」から操作してください。
 // 直したら「デプロイを管理 → 編集 → 新しいバージョン」で公開し直してください。
-var APP_VERSION = '1.1.0';
+var APP_VERSION = '1.1.1';
 var VIDEO_CHUNK_BYTES = 2 * 1024 * 1024;
 var VIDEO_TYPES = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp', 'video/x-m4v': '.m4v' };
 var TZ = 'Asia/Tokyo';
@@ -109,6 +109,28 @@ function records_(sheet, fields) {
     Object.keys(fields).forEach(function (key) { var col = heads.indexOf(fields[key]); obj[key] = col < 0 || row[col] === undefined ? '' : row[col]; });
     return obj;
   }).filter(function (obj) { return obj.id !== ''; });
+}
+// スクリプトロックの中で呼ぶ。印は移行がすべて済んだときだけ残す。
+function ensurePostHeaders_(d) {
+  var key = 'spm:heads:' + d.id + ':' + APP_VERSION;
+  if (cache_().get(key)) return;
+  var sheet = ensureSheet_('投稿_' + d.id, PHOTO_FIELDS);
+  var pending = records_(sheet, PHOTO_FIELDS).filter(function (r) { return r.kind === ''; });
+  if (pending.length) {
+    var files = DriveApp.getFolderById(d.folderId).getFiles(), byId = {};
+    while (files.hasNext()) {
+      var file = files.next();
+      byId[file.getId()] = { mime: file.getMimeType(), size: file.getSize() };
+    }
+    var rev = nextRev_(), updated = dateText_();
+    pending.forEach(function (r) {
+      var info = byId[r.fileId], video = info && /^video\//i.test(info.mime);
+      var changes = { kind: video ? '動画' : '写真', rev: rev, updated: updated };
+      if (video) changes.sizeMB = info.size / (1024 * 1024);
+      writeRecord_(sheet, PHOTO_FIELDS, r.row, changes);
+    });
+  }
+  cache_().put(key, '1', 21600);
 }
 function cellValue_(v) { return typeof v === 'number' || typeof v === 'boolean' ? v : asText_(v); }
 function appendRecord_(sheet, fields, obj) {
@@ -266,7 +288,7 @@ function setup_() {
     if (!p[PROP.REV]) changes[PROP.REV] = '0';
     if (Object.keys(changes).length) writeProps_(changes);
     // 過去の投稿シートも、人が見出しを削った場合は末尾へ補う。
-    disasters_().forEach(function (d) { ensureSheet_('投稿_' + d.id, PHOTO_FIELDS); ensureSheet_('サムネ_' + d.id, THUMB_FIELDS, true); });
+    disasters_().forEach(function (d) { cache_().remove('spm:heads:' + d.id + ':' + APP_VERSION); ensurePostHeaders_(d); ensureSheet_('サムネ_' + d.id, THUMB_FIELDS, true); });
     if (made.length || Object.keys(changes).length) log_('設定', '最初の設定を行いました。', 'メニュー');
     return { ok: true, created: made, postCode: p[PROP.POST_CODE], adminPass: p[PROP.ADMIN_PASS], accepting: accepting_(p[PROP.ACCEPT]) };
   });
@@ -487,6 +509,7 @@ function upload_(data) {
 // 呼び出し元がロックと受付・重複・上限の確認を済ませてから使う。
 function recordMedia_(cfg, item, thumb, file, onCommitted) {
   var d = cfg.current, dId = d.id, sheet = spreadsheet_().getSheetByName('投稿_' + dId);
+  ensurePostHeaders_(d);
   var same = cachedJson_('spm:pid:' + dId + ':' + item.pid) || findRecord_(sheet, PHOTO_FIELDS, 'pid', item.pid);
   var no = same ? Number(same.no) : Number(d.lastNo) + 1;
   item.no = no; item.at = dateText_(); item.updated = item.at; item.fileId = file.getId(); item.url = file.getUrl(); item.rev = nextRev_();
@@ -522,6 +545,7 @@ function videoRequest_(data, fn) {
     readLockedProps_(); cfg = getConfig_(true);
     if (!cfg.accepting || !cfg.current) return fail_('closed');
     if (!postAuthorized_(data, cfg)) return fail_('code');
+    ensurePostHeaders_(cfg.current);
     return fn(cfg);
   } finally { lock.releaseLock(); }
 }
@@ -610,8 +634,8 @@ function media_(data) {
   if (!uuidValid_(data.id) || !Number.isSafeInteger(data.start) || data.start < 0 || !Number.isSafeInteger(data.length) || data.length < 1 || data.length > 8 * 1024 * 1024) return fail_('bad', '動画の読み込み範囲を確認してください。');
   var item = findRecord_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS, 'id', data.id);
   if (!item) return fail_('notfound');
-  if (item.kind !== '動画') return fail_('bad', '動画を選んでください。');
   var file = DriveApp.getFileById(item.fileId); if (file.isTrashed()) return fail_('notfound');
+  if (!/^video\//i.test(file.getMimeType())) return fail_('bad', '動画を選んでください。');
   var total = file.getSize(); if (data.start >= total) return fail_('bad', '動画の読み込み範囲を確認してください。');
   var end = Math.min(total - 1, data.start + data.length - 1);
   var reply = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(item.fileId) + '?alt=media', { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + data.start + '-' + end }, muteHttpExceptions: true, followRedirects: false });
@@ -636,6 +660,15 @@ function list_(data) {
   var d = knownDisaster_(cfg, data.d); if (!d) return fail_('notfound');
   var since = data.since === undefined ? 0 : Number(data.since);
   if (!Number.isInteger(since) || since < 0) return fail_('bad', '新着を確認できませんでした。「↻ 全部読み直す」を押してください。');
+  if (!cache_().get('spm:heads:' + d.id + ':' + APP_VERSION)) {
+    var lock = LockService.getScriptLock();
+    try { lock.waitLock(20000); } catch (e) { return fail_('busy'); }
+    try {
+      if (!adminAuthorized_(data, { props: readLockedProps_() })) return fail_('auth');
+      ensurePostHeaders_(d);
+    }
+    finally { lock.releaseLock(); }
+  }
   var storedRev = cache_().get('spm:rev'), rev = Number(storedRev === null ? readProps_()[PROP.REV] || 0 : storedRev);
   if (storedRev === null) cache_().put('spm:rev', String(rev), 21600);
   if (since > 0 && rev <= since) return { ok: true, rev: rev, items: [], thumbs: {} };
@@ -650,9 +683,10 @@ function photo_(data) {
   if (!uuidValid_(data.id)) return fail_('bad', '写真を確認できませんでした。一覧を読み直して選んでください。');
   var item = findRecord_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS, 'id', data.id);
   if (!item) return fail_('notfound');
-  if (item.kind === '動画') return fail_('bad', '動画は動画の読み込みから開いてください。');
   var file = DriveApp.getFileById(item.fileId); if (file.isTrashed()) return fail_('notfound');
-  return { ok: true, mime: 'image/jpeg', b64: Utilities.base64Encode(file.getBlob().getBytes()), name: file.getName() };
+  var mime = file.getMimeType();
+  if (/^video\//i.test(mime)) return fail_('video', '動画です。動画として開きます。');
+  return { ok: true, mime: mime, b64: Utilities.base64Encode(file.getBlob().getBytes()), name: file.getName() };
 }
 function update_(data) {
   var cfg = getConfig_(); if (!adminAuthorized_(data, cfg)) return fail_('auth');
@@ -668,6 +702,7 @@ function update_(data) {
   if (invalidBool) return fail_('bad', '至急と非表示の指定を確認してください。');
   return mutation_(function () {
     var fresh = getConfig_(true); if (!adminAuthorized_(data, fresh)) return fail_('auth');
+    ensurePostHeaders_(knownDisaster_(fresh, data.d));
     var sheet = spreadsheet_().getSheetByName('投稿_' + data.d), rows = records_(sheet, PHOTO_FIELDS).filter(function (r) { return r.pid === data.pid; });
     if (!rows.length) return fail_('notfound');
     if (Object.keys(changes).length === 0) return { ok: true, rev: Number(readProps_()[PROP.REV] || 0), items: rows.map(publicItem_) };
@@ -840,4 +875,4 @@ function dlgAdminPass(pass) { return setAdminPass_(pass, 'メニュー'); }
 function dlgUnlock() { return unlock_('メニュー'); }
 function dlgSetupHome(text) { var point = parseLocationText_(text); return !String(text || '').trim() ? { ok: true } : point && point.lat !== undefined ? setMapHome_(point.lat, point.lng, 13, 'メニュー') : fail_('bad', '地図の座標を読み取れませんでした。'); }
 
-var SPM_CODE_END = '1.1.0';
+var SPM_CODE_END = '1.1.1';

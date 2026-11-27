@@ -665,9 +665,65 @@ try {
     await admin.wait(`SPM.admin.state.settings.postCode===${JSON.stringify(nextCode)}`, { timeout: 70000, interval: 250 });
     const displayed = await admin.evaluate(`${q('.secret-code')}.textContent`); assert.equal(displayed.replace('-', ''), nextCode); assert.equal(await admin.evaluate('SPM.admin.state.d'), originalId); await closeDialog(admin);
   });
+  await check('古いシートの動画', async () => {
+    // 災害が切り替わるので管理の確認後に置く。既存画面の表示・保存領域は保つ。
+    const page = await browser.newPage('about:blank', { isolated: true });
+    let viewer;
+    try {
+      await mobile(page);
+      const started = await run('startDisaster_', '訓練', '古いシートの動画の訓練', 'メニュー');
+      assert.equal(started.ok, true);
+      assert.equal((await json('/test/legacy-post-sheet', { d: started.id })).ok, true);
+      const oldHeads = (await state()).sheets['投稿_' + started.id].data[0];
+      for (const head of ['種類', '長さ(秒)', '大きさ(MB)']) assert.equal(oldHeads.includes(head), false);
+      await page.navigate(mock.siteUrl + '/index.html?api=' + encodeURIComponent(mock.gasUrl) + '#k=' + encodeURIComponent((await credentials()).code));
+      await page.wait(`${has('いまいる場所で送る')} && !${q('#code')}`);
+      await click(page, '🗂 あとで場所を決めて送る'); await addVideo(page);
+      const record = (await db(page, 'draft'))[0]; assert.equal(record.kind, 'video');
+      await click(page, '場所を決める'); await page.wait(`!!${q('.place-map')}`);
+      await mapTap(page); await click(page, 'この場所に決める');
+      await sendPhotos(page); await rowCount(1, started.id);
+      const saved = rows(await state(), started.id)[0];
+      assert.equal(saved['写真ID'], record.id); assert.equal(saved['種類'], '動画');
+      assert.ok(saved['大きさ(MB)'] > 0);
+
+      viewer = await browser.newPage('about:blank', { isolated: true });
+      await viewer.bringToFront();
+      await viewer.navigate(mock.siteUrl + '/admin.html?api=' + encodeURIComponent(mock.gasUrl));
+      await viewer.fill(q('#admin-pass'), (await credentials()).pass); await click(viewer, 'ログイン');
+      await viewer.wait(`SPM.admin.state.d===${JSON.stringify(started.id)} && SPM.admin.cache().loaded`);
+      const chosen = (await groups(viewer)).find(p => p.photos.some(r => r.id === record.id)); assert.ok(chosen);
+      assert.equal(chosen.photos[0].kind, 'video');
+      async function openVideo() {
+        await viewer.evaluate(`SPM.adminViews.detail(${JSON.stringify(chosen.pid)},${JSON.stringify(record.id)})`);
+        await viewer.wait(`${q('.detail-video')}?.readyState>=1 && ${q('.detail-video')}.duration>0`, { timeout: 60000 });
+        await viewer.evaluate(`spmTest.playing=false; spmTest.playError=''; ${q('.detail-video')}.muted=true; void ${q('.detail-video')}.play().then(()=>{spmTest.playing=true;}).catch(e=>{spmTest.playError=e.message;}); true`);
+        await viewer.wait(`spmTest.playError || (spmTest.playing && ${q('.detail-video')}.currentTime>0)`, { timeout: 15000 });
+        assert.equal(await viewer.evaluate('spmTest.playError'), '');
+        await viewer.evaluate(`${q('.detail-video')}.pause()`);
+      }
+      await openVideo(); await closeDialog(viewer);
+      // 一覧を開いたままの端末に残った「写真」もphotoのvideo応答で切り替わる。
+      await viewer.evaluate(`(() => {
+        SPM.admin.cache().items.get(${JSON.stringify(record.id)}).kind='photo';
+        SPM.admin.state.photos.clear(); spmTest.fetches=[];
+      })()`);
+      await openVideo();
+      const actions = await viewer.evaluate('spmTest.fetches.map(r=>r.a)');
+      assert.ok(actions.includes('photo')); assert.ok(actions.includes('media'));
+      for (const current of [page, viewer]) {
+        const englishErrors = await current.evaluate(`Array.from(document.querySelectorAll('.error,[role=alert],[role=status],.toast')).filter(n=>n.getClientRects().length && getComputedStyle(n).visibility!=='hidden').map(n=>n.textContent.trim()).filter(t=>/[A-Za-z]/.test(t) && !/[\u3041-\u3096\u30a1-\u30fa\u3400-\u9fff]/.test(t))`);
+        assert.deepEqual(englishErrors, [], '画面に英語だけのエラーを出さない');
+        assert.equal(await current.evaluate(has('The source image cannot be decoded.')), false);
+      }
+    } finally {
+      try { if (viewer) await viewer.close(); }
+      finally { try { await page.close(); } finally { await admin.bringToFront(); } }
+    }
+  });
   await check('投稿11 前の受付の下書きと送信待ち', async () => {
     await post.bringToFront();
-    // 受付中の災害を戻せないため、管理1〜10と追加stateの後で行う。
+    // 受付中の災害を戻せないため、管理1〜10・追加state・古いシートの動画の後で行う。
     const page = await browser.newPage('about:blank', { isolated: true });
     async function openCurrent() {
       const latest = (await credentials()).code;

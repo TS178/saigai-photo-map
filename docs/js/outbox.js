@@ -184,7 +184,7 @@
     options = config || {};
     if (initialized) return;
     initialized = true;
-    function trigger() { send().catch(function (e) { root.SPM.dom.toast(e.message); }); }
+    function trigger() { send().catch(function (e) { root.SPM.dom.toast(root.SPM.util.userMessage(e, '送信できませんでした。もう一度お試しください。')); }); }
     root.addEventListener('online', trigger);
     root.document.addEventListener('visibilitychange', function () { if (!root.document.hidden) trigger(); });
     root.setInterval(trigger, 60000);

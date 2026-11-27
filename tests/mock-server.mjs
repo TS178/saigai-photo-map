@@ -61,6 +61,16 @@ export async function startMock({ sitePort = 0, gasPort = 0, videoChunkBytes } =
       if (url.pathname === '/test/run' && req.method === 'POST') {
         const data = await body(req); json(res, gas.call(data.fn, ...(data.args || [])) ?? null); return;
       }
+      if (url.pathname === '/test/legacy-post-sheet' && req.method === 'POST') {
+        const data = await body(req), sheet = gas.sheets.get('投稿_' + data.d);
+        if (!sheet) throw new Error('投稿シートがありません。');
+        for (const head of ['種類', '長さ(秒)', '大きさ(MB)']) {
+          const index = sheet.data[0].indexOf(head);
+          if (index >= 0) sheet.deleteColumn(index + 1);
+        }
+        gas.cache.remove('spm:heads:' + data.d + ':' + gas.context.APP_VERSION);
+        json(res, { ok: true }); return;
+      }
       if (url.pathname === '/test/flags' && req.method === 'POST') {
         const data = await body(req);
         if (typeof data.dropNextUploadResponse === 'boolean') flags.dropNextUploadResponse = data.dropNextUploadResponse;

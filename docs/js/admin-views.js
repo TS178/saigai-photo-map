@@ -8,7 +8,7 @@
     var node = el('button', { type: 'button', text: text, class: className || '' });
     node.addEventListener('click', async function (event) {
       event.stopPropagation(); node.disabled = true;
-      try { await handler(event); } catch (e) { dom.toast(e.message || '操作できませんでした。もう一度お試しください。'); }
+      try { await handler(event); } catch (e) { dom.toast(S.util.userMessage(e, '操作できませんでした。もう一度お試しください。')); }
       finally { node.disabled = node.dataset.keepDisabled === 'true'; }
     });
     return node;
@@ -156,6 +156,12 @@
       photoCount.textContent = (index + 1) + ' / ' + post.photos.length + '件'; shot.textContent = '撮影日時：' + (photo.shot || '記録なし'); previous.disabled = index <= 0; next.disabled = index >= post.photos.length - 1;
       previous.dataset.keepDisabled = String(previous.disabled); next.dataset.keepDisabled = String(next.disabled);
       try {
+        var reply;
+        if (photo.kind !== 'video') {
+          try { reply = await S.admin.photo(photo.id, d); }
+          catch (e) { if (e.code !== 'video') throw e; photo.kind = 'video'; }
+          if (box.closed || requestNumber !== photoSerial) return;
+        }
         if (photo.kind === 'video') {
           var status = photoArea.firstChild, progress = el('progress', { max: '1', value: '0', 'aria-label': '動画の読み込み' });
           photoArea.appendChild(progress);
@@ -166,15 +172,13 @@
           player.addEventListener('error', function () { if (!box.closed && requestNumber === photoSerial) dom.toast('このブラウザで再生できません。Googleドライブで開いてください。'); });
           dom.clear(photoArea); photoArea.appendChild(player); player.load(); return;
         }
-        var reply = await S.admin.photo(photo.id, d);
-        if (box.closed || requestNumber !== photoSerial) return;
-        var image = el('img', { src: 'data:image/jpeg;base64,' + reply.b64, alt: 'No.' + post.no + '-' + photo.n + 'の写真', class: 'detail-photo' });
+        var image = el('img', { src: 'data:' + reply.mime + ';base64,' + reply.b64, alt: 'No.' + post.no + '-' + photo.n + 'の写真', class: 'detail-photo' });
         if (image.decode) await image.decode();
         if (box.closed || requestNumber !== photoSerial) return;
         dom.clear(photoArea); photoArea.appendChild(image);
       } catch (e) {
         if (box.closed || requestNumber !== photoSerial) return;
-        dom.clear(photoArea); photoArea.append(el('p', { class: 'error', text: e.message }), button('読み直す', showPhoto, 'secondary'));
+        dom.clear(photoArea); photoArea.append(el('p', { class: 'error', text: S.util.userMessage(e, '写真・動画を読み込めませんでした。もう一度お試しください。') }), button('読み直す', showPhoto, 'secondary'));
       }
     }
     var photoArea = el('div', { class: 'detail-photo-area' }), photoCount = el('strong'), shot = el('p');
@@ -320,7 +324,7 @@
       await new Promise(function (resolve) { root.setTimeout(resolve, 0); }); if (cancelled) return;
       var archive = S.zip.makeZip(entries); if (cancelled) return;
       S.share.download(new Blob([archive], { type: 'application/zip' }), exportName('zip', disaster)); message.textContent = photos.length + '件のZIPを保存しました。';
-    } catch (e) { if (!cancelled) { message.textContent = '保存できませんでした：' + e.message + '。もう一度出力からやり直してください。'; message.className = 'error'; } }
+    } catch (e) { if (!cancelled) { message.textContent = S.util.userMessage(e, '保存できませんでした。もう一度出力からやり直してください。'); message.className = 'error'; } }
   }
   async function decodeImage(src, alt) {
     var image = el('img', { alt: alt });
@@ -370,7 +374,7 @@
       close(); S.admin.byId('admin-app').hidden = true; S.admin.byId('print-mode').hidden = false;
       // 全画像のdecode完了後、印刷用の配置を反映してから印刷する。
       root.requestAnimationFrame(function () { root.requestAnimationFrame(function () { if (!S.admin.byId('print-mode').hidden && S.admin.state.token) root.print(); }); });
-    } catch (e) { if (!cancelled) { message.textContent = '印刷の準備ができませんでした：' + e.message + '。もう一度お試しください。'; message.className = 'error'; } }
+    } catch (e) { if (!cancelled) { message.textContent = S.util.userMessage(e, '印刷の準備ができませんでした。もう一度お試しください。'); message.className = 'error'; } }
   }
   function init() {
     S.admin.byId('filter-button').addEventListener('click', filters);

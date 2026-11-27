@@ -220,7 +220,7 @@
     var d = disasterId || state.d, key = d + ':' + id;
     if (state.photos.has(key)) return state.photos.get(key);
     var pending = request('photo', { d: d, id: id }).then(function (reply) {
-      if (!reply.ok) { if (state.photos.get(key) === pending) state.photos.delete(key); throw new Error(reply.message); }
+      if (!reply.ok) { if (state.photos.get(key) === pending) state.photos.delete(key); var error = new Error(reply.message); error.code = reply.error; throw error; }
       // 大量の写真を出力しても本体をすべて画面に抱え込まない。
       while (state.photos.size > 24) state.photos.delete(state.photos.keys().next().value);
       return reply;
