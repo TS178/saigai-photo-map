@@ -8,3 +8,14 @@ desktop.ini
 .DS_Store
 # Codex への依頼文（作業が終わったら消す）
 _作業用/
+# 説明書・設計・運用の道具・試験・GAS の控えは公開しない（手元だけに残す。公開するのは docs/ のサイト本体だけ）
+README.md
+手引き/
+設計/
+gas/
+tests/
+tools/
+*.xlsx
+*.docx
+*.pptx
+~$*
