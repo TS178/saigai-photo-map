@@ -76,7 +76,7 @@
       var p = row.p, node = button('', function () { detail(p.pid, row.photo.id); }, 'tile secondary' + (p.hidden ? ' is-hidden' : ''));
       node.append(photoThumb(row.photo), el('strong', { text: 'No.' + p.no + '-' + row.photo.n }), el('span', { text: row.photo.shot || row.photo.at }), badge(p.cat), statusBadge(p.status));
       if (p.urgent) node.appendChild(badge('! 至急', 'urgent'));
-      area.appendChild(node);
+      S.admin.hover(node, p.pid); area.appendChild(node);
     });
     if (!photos.length) area.appendChild(el('p', { class: 'empty-state', text: '表示する写真はありません。絞り込みの条件も確認してください。' }));
   }
@@ -108,7 +108,7 @@
       p.photos.filter(function (photo) { return photo.kind === 'video'; }).forEach(function (photo) { previews.appendChild(photoThumb(photo)); });
       row.cells[8].appendChild(previews);
       row.appendChild(el('td', {}, [el('span', { text: S.adminMap.located(p) ? p.lat + ', ' + p.lng : '位置なし' }), button('地図で見る', function () { S.adminMap.focus(p.pid); }, 'secondary')]));
-      row.addEventListener('click', function () { detail(p.pid); }); body.appendChild(row);
+      S.admin.hover(row, p.pid); row.addEventListener('click', function () { detail(p.pid); }); body.appendChild(row);
     });
     var columns = el('colgroup');
     ['select', 'number', 'date', 'category', 'urgent', 'status', 'person', 'comment', 'count', 'location'].forEach(function (name) { columns.appendChild(el('col', { class: 'column-' + name })); });
@@ -134,7 +134,7 @@
     posts.slice().sort(function (a, b) { return b.no - a.no; }).forEach(function (p) {
       var unread = S.admin.state.unread.has(S.admin.state.d + ':' + p.pid), node = button('', function () { detail(p.pid); }, 'recent-item secondary');
       node.append(photoThumb(p.photos[0]), el('span', {}, [el('strong', { text: (unread ? 'NEW ' : '') + 'No.' + p.no + ' ' + p.cat }), el('span', { class: 'line-clamp', text: p.note || 'コメントなし' }), statusBadge(p.status)]));
-      if (p.urgent) node.appendChild(badge('! 至急', 'urgent')); list.appendChild(node);
+      if (p.urgent) node.appendChild(badge('! 至急', 'urgent')); S.admin.hover(node, p.pid); list.appendChild(node);
     });
     if (!posts.length) list.appendChild(el('p', { text: '投稿が届くと、ここに表示されます。' }));
     box.appendChild(list); area.appendChild(box);
@@ -160,10 +160,10 @@
   function detail(pid, photoId) {
     var d = S.admin.state.d, post = S.admin.groups().find(function (p) { return p.pid === pid; }); if (!post) return;
     S.admin.markOpened(pid);
-    var miniMap, mediaUrl, player;
+    var miniMap, mediaHandle, player;
     function releaseMedia() {
       if (player) { player.pause(); player.removeAttribute('src'); player.load(); player = null; }
-      if (mediaUrl) { root.URL.revokeObjectURL(mediaUrl); mediaUrl = null; }
+      if (mediaHandle) { mediaHandle.release(); mediaHandle = null; }
     }
     var box = modal('No.' + post.no + ' の詳細', function () { photoSerial++; releaseMedia(); if (miniMap) { miniMap.remove(); miniMap = null; } });
     var index = Math.max(0, post.photos.findIndex(function (p) { return p.id === photoId; })), photoSerial = 0;
@@ -171,30 +171,33 @@
       var requestNumber = ++photoSerial, photo = post.photos[index];
       removeOne.textContent = photo.kind === 'video' ? 'この動画を削除' : 'この写真を削除';
       releaseMedia();
-      dom.clear(photoArea); photoArea.appendChild(el('p', { text: '読み込み中…', role: 'status' }));
+      dom.clear(photoArea);
+      var thumbnail = S.admin.cache(d).thumbs.get(photo.id);
+      if (thumbnail) photoArea.appendChild(el('img', { src: 'data:image/jpeg;base64,' + thumbnail, alt: 'No.' + post.no + '-' + photo.n + 'のプレビュー', class: 'detail-photo detail-preview' }));
+      var status = el('p', { class: 'detail-loading', text: photo.kind === 'video' ? '▶ 動画を読み込み中…' : '高画質を読み込み中…', role: 'status' });
+      var progress = el('progress', { max: '1', value: '0', class: 'detail-progress', 'aria-label': '動画の読み込み', hidden: photo.kind !== 'video' });
+      photoArea.append(status, progress);
       photoCount.textContent = (index + 1) + ' / ' + post.photos.length + '件'; shot.textContent = '撮影日時：' + (photo.shot || '記録なし'); previous.disabled = index <= 0; next.disabled = index >= post.photos.length - 1;
       previous.dataset.keepDisabled = String(previous.disabled); next.dataset.keepDisabled = String(next.disabled);
       try {
-        var reply;
-        if (photo.kind !== 'video') {
-          try { reply = await S.admin.photo(photo.id, d); }
-          catch (e) { if (e.code !== 'video') throw e; photo.kind = 'video'; removeOne.textContent = 'この動画を削除'; }
+        mediaHandle = S.mediaCache.acquire(d, photo, 0, function (value) {
           if (box.closed || requestNumber !== photoSerial) return;
-        }
-        if (photo.kind === 'video') {
-          var status = photoArea.firstChild, progress = el('progress', { max: '1', value: '0', 'aria-label': '動画の読み込み' });
-          photoArea.appendChild(progress);
-          var blob = await S.share.loadMedia(d, photo.id, function (value) { status.textContent = value.text; progress.max = value.total; progress.value = value.loaded; }, function () { return box.closed || requestNumber !== photoSerial; });
-          if (!blob || box.closed || requestNumber !== photoSerial) return;
-          mediaUrl = root.URL.createObjectURL(blob);
-          player = el('video', { controls: '', playsinline: '', preload: 'metadata', src: mediaUrl, class: 'detail-video', 'aria-label': 'No.' + post.no + '-' + photo.n + 'の動画' });
-          player.addEventListener('error', function () { if (!box.closed && requestNumber === photoSerial) dom.toast('このブラウザで再生できません。Googleドライブで開いてください。'); });
-          dom.clear(photoArea); photoArea.appendChild(player); player.load(); return;
-        }
-        var image = el('img', { src: 'data:' + reply.mime + ';base64,' + reply.b64, alt: 'No.' + post.no + '-' + photo.n + 'の写真', class: 'detail-photo' });
-        if (image.decode) await image.decode();
+          status.textContent = '▶ ' + value.text; progress.hidden = false; progress.max = value.total; progress.value = value.loaded;
+        });
+        var entry = await mediaHandle.promise;
         if (box.closed || requestNumber !== photoSerial) return;
-        dom.clear(photoArea); photoArea.appendChild(image);
+        if (entry.kind === 'video') {
+          photo.kind = 'video'; removeOne.textContent = 'この動画を削除';
+          player = el('video', { controls: '', playsinline: '', preload: 'metadata', src: entry.url, class: 'detail-video', 'aria-label': 'No.' + post.no + '-' + photo.n + 'の動画' });
+          player.addEventListener('error', function () { if (!box.closed && requestNumber === photoSerial) dom.toast('このブラウザで再生できません。Googleドライブで開いてください。'); });
+          dom.clear(photoArea); photoArea.appendChild(player); player.load();
+        } else {
+          var image = el('img', { src: entry.url, alt: 'No.' + post.no + '-' + photo.n + 'の写真', class: 'detail-photo' });
+          if (image.decode) await image.decode();
+          if (box.closed || requestNumber !== photoSerial) return;
+          dom.clear(photoArea); photoArea.appendChild(image);
+        }
+        post.photos.forEach(function (other) { if (other.id !== photo.id) S.admin.prefetchItem(other, 1, d); });
       } catch (e) {
         if (box.closed || requestNumber !== photoSerial) return;
         dom.clear(photoArea); photoArea.append(el('p', { class: 'error', text: S.util.userMessage(e, '写真・動画を読み込めませんでした。もう一度お試しください。') }), button('読み直す', showPhoto, 'secondary'));
@@ -305,7 +308,8 @@
     var lock = (cfg.locks || {}).post || {};
     box.body.append(el('p', { text: '投稿の確認失敗：' + (lock.recentFailures || 0) + '回' + (lock.until > Date.now() ? '・一時ロック中' : '') }), button('投稿のロックを解除する', function () { return config({ op: 'unlock' }); }, 'secondary'));
     box.body.appendChild(check('新着を短い音で知らせる（初期はオフ）', S.admin.state.sound, function (checked) { S.admin.enableSound(checked); }).label);
-    box.body.append(folderLinks(cfg), el('small', { text: '受付の仕組みの版：' + S.admin.state.version + ' ／ ページの版：' + root.SPM_CONFIG.expectedGasVersion }), el('small', { text: '受付の接続先：' + (cfg.webAppUrl || '未取得') }), el('p', { text: '管理画面のパスワードは、スプレッドシートのメニュー⑤で変えてください。' }));
+    box.body.appendChild(check('写真を先読みする（通信量が増えます）', S.admin.state.prefetch, function (checked) { S.admin.enablePrefetch(checked); }).label);
+    box.body.append(folderLinks(cfg), el('small', { text: 'ページ ' + root.SPM_CONFIG.pageVersion + '／GAS ' + S.admin.state.version }), el('small', { text: '受付の接続先：' + (cfg.webAppUrl || '未取得') }), el('p', { text: '管理画面のパスワードは、スプレッドシートのメニュー⑤で変えてください。' }));
     var shareKey;
     box.refreshSettings = function () {
       cfg = S.admin.state.settings; current = cfg.current;
@@ -323,7 +327,6 @@
   function refreshDetail() { if (active && active.refreshDetail) active.refreshDetail(); }
   function stamp(date) { var text = S.util.formatJst(date); return text.slice(0, 10).replace(/\//g, '') + '-' + text.slice(11, 16).replace(':', ''); }
   function exportName(extension, disaster) { return S.util.safeFileName('災害写真_' + (disaster ? disaster.name : '記録') + '_' + stamp(new Date()), 150) + '.' + extension; }
-  function bytes(b64) { var binary = root.atob(b64), data = new Uint8Array(binary.length); for (var i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i); return data; }
   function exportsDialog() {
     var posts = S.admin.targets(), d = S.admin.state.d, disaster = S.admin.currentDisaster(), box = modal('出力');
     box.body.appendChild(el('p', { text: '対象：' + (S.admin.state.selected.size ? 'チェックした' : '今の絞り込みの') + posts.length + '投稿・' + posts.reduce(function (n, p) { return n + p.photos.length; }, 0) + '枚' }));
@@ -351,7 +354,7 @@
           extension = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp', 'video/x-m4v': '.m4v' }[blob.type];
           if (!extension) throw new Error('動画の形式を確認できませんでした。');
           data = new Uint8Array(await blob.arrayBuffer());
-        } else { var photo = await S.admin.photo(p.id, d); data = bytes(photo.b64); }
+        } else { var photo = await S.admin.photo(p.id, d); data = new Uint8Array(await photo.blob.arrayBuffer()); }
         if (cancelled) return;
         var date = p.shot || p.at, filename = S.util.safeFileName('No' + String(p.no).padStart(4, '0') + '-' + p.n + '_' + stamp(date.replace(/\//g, '-').replace(' ', 'T') + '+09:00') + '_' + p.cat, 76) + extension;
         entries.push({ name: (p.kind === 'video' ? '動画/' : '写真/') + filename, data: data, date: new Date(date.replace(/\//g, '-').replace(' ', 'T') + '+09:00') }); progress.value = i + 1;
@@ -387,11 +390,13 @@
         article.appendChild(el('h2', { text: 'No.' + p.no + ' ' + p.cat + (p.urgent ? ' 【至急】' : '') + ' ／ ' + p.status + ' ／ ' + p.at }));
         for (var n = 0; n < Math.min(4, p.photos.length); n++) {
           message.textContent = '写真を取得中… ' + done + ' / ' + total + '枚';
-          var item = p.photos[n], b64;
-          if (item.kind === 'video') b64 = S.admin.cache(d).thumbs.get(item.id);
-          else { var reply = await S.admin.photo(item.id, d); b64 = reply.b64; }
-          if (cancelled) return;
-          var image = b64 ? await decodeImage('data:image/jpeg;base64,' + b64, 'No.' + p.no + '-' + item.n) : el('span', { class: 'thumb-empty', text: '動画' });
+          var item = p.photos[n], b64 = '', imageUrl = '', imageHandle = null, image;
+          try {
+            if (item.kind === 'video') b64 = S.admin.cache(d).thumbs.get(item.id);
+            else { imageHandle = S.mediaCache.acquire(d, item, 0); var reply = await imageHandle.promise; imageUrl = reply.url; }
+            if (cancelled) return;
+            image = imageUrl || b64 ? await decodeImage(imageUrl || 'data:image/jpeg;base64,' + b64, 'No.' + p.no + '-' + item.n) : el('span', { class: 'thumb-empty', text: '動画' });
+          } finally { if (imageHandle) imageHandle.release(); }
           if (cancelled) return;
           if (item.kind === 'video') images.appendChild(el('figure', { class: 'print-video' }, [image, el('figcaption', { text: '▶ 動画' + (S.video.formatDuration(item.duration) ? '（' + S.video.formatDuration(item.duration) + '）' : '') })]));
           else images.appendChild(image);

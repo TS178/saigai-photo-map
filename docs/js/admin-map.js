@@ -33,6 +33,7 @@
     if (!element) return;
     root.L.DomEvent.off(element, 'focus blur', markerFocus, marker);
     root.L.DomEvent.on(element, 'focus blur', markerFocus, marker);
+    if (!element.spmPrefetchBound) { S.admin.hover(element, marker.spmPid); element.spmPrefetchBound = true; }
     marker.spmFocused = root.document.activeElement === element;
   }
   function clusterIcon(group) {

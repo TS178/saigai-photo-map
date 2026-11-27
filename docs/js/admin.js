@@ -3,10 +3,10 @@
   root.SPM = root.SPM || {};
   var S = root.SPM, dom = S.dom, el = dom.el, document = root.document;
   var state = {
-    token: '', settings: {}, disasters: [], version: '', d: '', caches: new Map(), photos: new Map(),
+    token: '', settings: {}, disasters: [], version: '', d: '', caches: new Map(), photos: S.mediaCache,
     view: 'map', summaryOpen: { map: true, tiles: true, list: false }, selected: new Set(), unread: new Set(), opened: new Set(),
     filters: { categories: [], statuses: [], urgent: false, from: '', to: '', person: '', keyword: '', hidden: false },
-    sort: { key: 'no', direction: -1 }, sound: false, epoch: 0
+    sort: { key: 'no', direction: -1 }, sound: false, prefetch: stored(storageFor('localStorage'), 'spm-prefetch') !== 'off', epoch: 0
   };
   var timer, stateTimer, stateLoading = null, store, loading = new Map(), configuring = false, audio;
   function byId(id) { return document.getElementById(id); }
@@ -51,7 +51,7 @@
   }
   function versionNotice() {
     var expected = root.SPM_CONFIG.expectedGasVersion;
-    dom.banner('warning', state.version && state.version !== expected ? '受付の仕組みの版（' + state.version + '）とページの版（' + expected + '）が違います。管理担当の方は、手引き01の「コードを直したとき」を見てください。' : '', 'version-banner');
+    dom.banner('warning', state.version && state.version !== expected ? 'GAS の版（' + state.version + '）が、このページに必要な版（' + expected + '）と違います。管理担当の方は、手引き01の「コードを直したとき」を見てください。' : '', 'version-banner');
     dom.banner('warning', state.settings.codeComplete === false ? '受付の仕組みの準備が完了していません。管理担当の方は、手引き01に沿ってCode.gsを全部貼り直し、公開し直してください。' : '', 'complete-banner');
   }
   function renderHeader() {
@@ -109,7 +109,7 @@
   function cleanRemoved(id) {
     var data = cache(id), pids = new Set(Array.from(data.items.values(), function (r) { return r.pid; }));
     data.thumbs.forEach(function (value, key) { if (!data.items.has(key)) data.thumbs.delete(key); });
-    state.photos.forEach(function (value, key) { if (key.startsWith(id + ':') && !data.items.has(key.slice(id.length + 1))) state.photos.delete(key); });
+    S.mediaCache.prune(id, new Set(data.items.keys()));
     [state.unread, state.opened].forEach(function (set) { set.forEach(function (key) { if (key.startsWith(id + ':') && !pids.has(key.slice(id.length + 1))) set.delete(key); }); });
   }
   function merge(id, reply, notify, replace) {
@@ -157,7 +157,7 @@
     dom.banner('error', '', 'connection-banner');
     if (id === state.d) {
       byId('load-state').textContent = '最終更新 ' + S.util.formatJst(new Date()).slice(11);
-      render(); S.adminViews.refreshDetail(); S.adminMap.initialView(groups()); S.adminMap.ripple(fresh);
+      render(); S.adminViews.refreshDetail(); S.adminMap.initialView(groups()); S.adminMap.ripple(fresh); prefetchRecent();
     }
   }
   function schedule() {
@@ -195,7 +195,7 @@
   async function switchDisaster(id) {
     if (!state.token) return;
     S.adminViews.close(); S.adminMap.cancelEdit();
-    state.d = id; state.selected.clear(); S.adminMap.resetView();
+    S.mediaCache.clear(); state.d = id; state.selected.clear(); S.adminMap.resetView();
     render(); if (cache().loaded) S.adminMap.initialView(groups()); persist(); await load(false); schedule();
   }
   async function update(pid, patch, disasterId) {
@@ -242,16 +242,28 @@
       return reply;
     } finally { configuring = false; }
   }
-  async function photo(id, disasterId) {
-    var d = disasterId || state.d, key = d + ':' + id;
-    if (state.photos.has(key)) return state.photos.get(key);
-    var pending = request('photo', { d: d, id: id }).then(function (reply) {
-      if (!reply.ok) { if (state.photos.get(key) === pending) state.photos.delete(key); var error = new Error(reply.message); error.code = reply.error; throw error; }
-      // 大量の写真を出力しても本体をすべて画面に抱え込まない。
-      while (state.photos.size > 24) state.photos.delete(state.photos.keys().next().value);
-      return reply;
-    });
-    state.photos.set(key, pending); return pending;
+  function photo(id, disasterId) {
+    var d = disasterId || state.d, item = cache(d).items.get(id) || { id: id };
+    return S.mediaCache.get(d, item, 0);
+  }
+  function prefetchItem(item, priority, d) {
+    if (!item || !state.token || (priority >= 2 && (!state.prefetch || document.hidden))) return;
+    S.mediaCache.get(d || state.d, item, priority).catch(function () { /* 詳細を開いたときに再試行し、日本語で案内する。 */ });
+  }
+  function prefetchRecent() {
+    if (!state.prefetch || document.hidden) return;
+    groups().filter(function (p) { return !p.hidden; }).slice(0, 12).forEach(function (p) { if (p.photos[0].kind !== 'video') prefetchItem(p.photos[0], 3); });
+  }
+  function prefetchPost(pid) { var p = groups().find(function (p) { return p.pid === pid; }); if (p) prefetchItem(p.photos[0], 2); }
+  function hover(node, pid) {
+    var timeout, d = state.d;
+    node.addEventListener('mouseenter', function () { timeout = root.setTimeout(function () { if (node.isConnected && state.d === d) prefetchPost(pid); }, 200); });
+    node.addEventListener('mouseleave', function () { root.clearTimeout(timeout); });
+  }
+  function enablePrefetch(enabled) {
+    state.prefetch = enabled;
+    try { root.localStorage.setItem('spm-prefetch', enabled ? 'on' : 'off'); } catch (e) { /* 保存できなくても今の画面では切り替える。 */ }
+    S.mediaCache.resume(); if (enabled) prefetchRecent();
   }
   function markOpened(pid) { state.unread.delete(state.d + ':' + pid); state.opened.add(state.d + ':' + pid); render(); }
   async function syncPostPage() {
@@ -300,7 +312,7 @@
     byId('reload').addEventListener('click', async function () { var button = byId('reload'); button.disabled = true; try { if (await refreshState()) await load(true); scheduleState(); } finally { button.disabled = false; } });
     document.querySelectorAll('[data-view]').forEach(function (button) { button.addEventListener('click', function () { setView(button.dataset.view); }); });
     byId('new-notice').addEventListener('click', function () { var p = filtered().find(function (item) { return state.unread.has(state.d + ':' + item.pid); }); if (p) S.adminMap.focus(p.pid); });
-    document.addEventListener('visibilitychange', function () { schedule(); scheduleState(); if (!document.hidden) refreshState(); });
+    document.addEventListener('visibilitychange', function () { schedule(); scheduleState(); S.mediaCache.resume(); if (!document.hidden) { prefetchRecent(); refreshState(); } });
     root.addEventListener('online', function () { if (isCurrent()) load(false); schedule(); });
     if (!S.api.getUrl()) { byId('login-error').textContent = '設定が済んでいません（config.js に GAS の URL を入れてください）'; byId('login-button').disabled = true; return; }
     var snapshot;
@@ -316,6 +328,6 @@
       await enter();
     }
   }
-  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
+  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, hover: hover, prefetchPost: prefetchPost, prefetchItem: prefetchItem, enablePrefetch: enablePrefetch, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
   document.addEventListener('DOMContentLoaded', function () { init().catch(function () { byId('login-error').textContent = '画面の準備ができませんでした。ページを読み直してください。'; }); });
 })(typeof window !== 'undefined' ? window : globalThis);
