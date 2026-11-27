@@ -58,6 +58,12 @@
           <button type="button" data-view="map" aria-pressed="true">地図</button>
           <button type="button" data-view="tiles" class="secondary" aria-pressed="false">タイル</button>
           <button type="button" data-view="list" class="secondary" aria-pressed="false">一覧</button>
+          <button type="button" data-view="split" class="secondary" aria-pressed="false">分割</button>
+          <div id="split-count" class="row" role="group" aria-label="分割数" hidden>
+            <button type="button" data-split-count="2">2</button>
+            <button type="button" data-split-count="3">3</button>
+            <button type="button" data-split-count="4">4</button>
+          </div>
         </div>
         <button id="filter-button" class="secondary" type="button">絞り込み</button>
         <button id="export-button" class="secondary" type="button">出力</button>
@@ -65,16 +71,19 @@
         <button id="settings-button" class="secondary" type="button">設定</button>
         <button id="logout" class="secondary" type="button">ログアウト</button>
       </nav>
+      <div id="header-notices" aria-label="新着のお知らせ"></div>
     </header>
     <div id="past-banner" role="status" hidden></div>
     <div id="current-banner" role="status" hidden></div>
-    <div class="result-bar"><span id="result-count" role="status" aria-live="polite"></span><span id="load-state" role="status"></span><button id="new-notice" type="button" hidden></button></div>
+    <div class="result-bar"><span id="result-count" role="status" aria-live="polite"></span><button id="unlocated-button" type="button" class="secondary" hidden></button><div id="result-notices"><button id="new-notice" type="button" hidden></button></div><span id="load-state" role="status"></span></div>
     <div id="position-tools" class="panel row" role="status" hidden></div>
     <main class="admin-layout">
       <div id="view-area">
         <section id="map-view" aria-label="投稿の地図"><div id="admin-map" class="map"></div></section>
         <section id="tiles-view" aria-label="写真・動画のタイル" hidden></section>
         <section id="list-view" aria-label="投稿の一覧" hidden></section>
+        <section id="detail-view" aria-label="投稿の詳細" hidden><p class="empty-state">投稿を選ぶと詳細が出ます。</p></section>
+        <div id="split-panes" hidden></div>
       </div>
       <aside id="summary-panel" aria-label="件数と新着"></aside>
     </main>

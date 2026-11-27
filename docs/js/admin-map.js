@@ -50,7 +50,6 @@
     map = S.mapbase.createMap(S.admin.byId('admin-map'), Object.assign({}, S.admin.state.settings.map || root.SPM_CONFIG.defaultMap));
     cluster = root.L.markerClusterGroup({ iconCreateFunction: clusterIcon, maxClusterRadius: 90, spiderfyOnMaxZoom: true, spiderfyDistanceMultiplier: 4, showCoverageOnHover: false, animate: !root.matchMedia('(prefers-reduced-motion: reduce)').matches });
     cluster.addTo(map);
-    addMissingControl();
     map.on('click', function (event) { if (edit && edit.placing && !edit.saving) placeAt(event.latlng); });
     cluster.on('clusterclick', function (event) { if (edit && edit.placing && !edit.saving) placeAt(event.latlng); });
     cluster.on('animationend spiderfied', flushRipples);
@@ -87,8 +86,6 @@
       marker.spmSignature = signature; marker.spmThumb = preview;
     });
     cluster.refreshClusters();
-    var missing = posts.filter(function (p) { return !located(p); }), button = root.document.getElementById('unlocated-button');
-    button.textContent = '位置なし ' + missing.length + '件'; button.disabled = !missing.length;
   }
   function initialView(posts) {
     if (!map || !needsView || S.admin.byId('map-view').hidden) return;
@@ -107,7 +104,8 @@
   }
   function focus(pid) {
     if (edit) { cancelEdit(); S.admin.render(); }
-    S.admin.setView('map'); var marker = markers.get(pid);
+    if (!S.admin.hasView('map')) S.admin.setView('map');
+    resize(); var marker = markers.get(pid);
     if (!marker) { S.adminViews.detail(pid); return; }
     var d = S.admin.state.d;
     cluster.zoomToShowLayer(marker, function () { if (!S.admin.state.token || S.admin.state.d !== d) return; S.adminViews.detail(pid); });
@@ -140,7 +138,7 @@
     positionBar('No.' + edit.no + 'をここに置きます（' + ll.lat.toFixed(6) + ', ' + ll.lng.toFixed(6) + '）。合っているか確認してください。', true);
   }
   function startEdit(p, placing) {
-    cancelEdit(); S.adminViews.close(); S.admin.setView('map'); S.admin.render();
+    cancelEdit(); S.adminViews.close(); S.adminViews.closeDetail(); if (!S.admin.hasView('map')) S.admin.setView('map'); S.admin.render();
     edit = { pid: p.pid, no: p.no, d: S.admin.state.d, placing: placing, marker: null, saving: false };
     // 編集中は束を押しても拡大・展開せず、置く操作だけを受け付ける。
     cluster.options.zoomToBoundsOnClick = false; cluster.options.spiderfyOnMaxZoom = false;
@@ -168,12 +166,7 @@
     });
     if (!posts.length) dialog.body.appendChild(el('p', { text: '位置なしの投稿はありません。' }));
   }
-  function addMissingControl() {
-    var control = root.L.control({ position: 'topleft' }), button = el('button', { id: 'unlocated-button', type: 'button', text: '位置なし 0件' });
-    control.onAdd = function () { var box = el('div', { class: 'missing-control' }, [button]); root.L.DomEvent.disableClickPropagation(box); root.L.DomEvent.disableScrollPropagation(box); return box; };
-    control.addTo(map); button.addEventListener('click', unlocated);
-  }
   function destroy() { cancelEdit(); if (map) map.remove(); map = cluster = null; markers.clear(); shown.clear(); pendingRipples.clear(); needsView = true; }
   function home() { var center = map.getCenter(); return { lat: center.lat, lng: center.lng, zoom: Math.min(18, map.getZoom()) }; }
-  S.adminMap = { init: init, render: render, initialView: initialView, resetView: resetView, focus: focus, ripple: ripple, resize: resize, startEdit: startEdit, cancelEdit: cancelEdit, destroy: destroy, home: home, located: located, color: color };
+  S.adminMap = { init: init, render: render, initialView: initialView, resetView: resetView, focus: focus, ripple: ripple, resize: resize, startEdit: startEdit, cancelEdit: cancelEdit, destroy: destroy, home: home, located: located, color: color, unlocated: unlocated };
 })(typeof window !== 'undefined' ? window : globalThis);

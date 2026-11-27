@@ -6,12 +6,54 @@
     token: '', settings: {}, disasters: [], version: '', d: '', caches: new Map(), photos: S.mediaCache,
     view: 'map', summaryOpen: { map: true, tiles: true, list: false }, selected: new Set(), unread: new Set(), opened: new Set(),
     filters: { categories: [], statuses: [], urgent: false, from: '', to: '', person: '', keyword: '', hidden: false },
-    sort: { key: 'no', direction: -1 }, sound: false, prefetch: stored(storageFor('localStorage'), 'spm-prefetch') !== 'off', epoch: 0
+    sort: { key: 'no', direction: -1 }, sound: readSound(), split: readSplit(), prefetch: stored(storageFor('localStorage'), 'spm-prefetch') !== 'off', epoch: 0
   };
   var timer, stateTimer, stateLoading = null, store, loading = new Map(), configuring = false, audio;
   function byId(id) { return document.getElementById(id); }
   function storageFor(name) { try { return root[name]; } catch (e) { return null; } }
   function stored(storage, key) { try { return storage.getItem(key); } catch (e) { return null; } }
+  function readSound() { var value = stored(storageFor('localStorage'), 'spm-sound'); return /^[1-5]$/.test(value || '') ? value : 'off'; }
+  function splitDefaults(count) { return count === 2 ? ['map', 'list'] : count === 3 ? ['map', 'tiles', 'list'] : ['map', 'tiles', 'list', 'detail']; }
+  function readSplit() {
+    try {
+      var value = JSON.parse(stored(storageFor('localStorage'), 'spm-split'));
+      if (value && [2, 3, 4].includes(value.count) && Array.isArray(value.views) && value.views.length === value.count && new Set(value.views).size === value.count && value.views.every(function (name) { return ['map', 'tiles', 'list', 'detail'].includes(name); })) return value;
+    } catch (e) { /* 保存が無ければ2分割で始める。 */ }
+    return { count: 2, views: splitDefaults(2) };
+  }
+  function hasView(name) { return state.view === name || state.view === 'split' && state.split.views.includes(name); }
+  function saveSplit() { try { root.localStorage.setItem('spm-split', JSON.stringify(state.split)); } catch (e) { /* 今の画面では使える。 */ } }
+  function layoutViews() {
+    var area = byId('view-area'), panes = byId('split-panes'), split = state.view === 'split';
+    ['map', 'tiles', 'list', 'detail'].forEach(function (name) { var node = byId(name + '-view'); area.appendChild(node); node.hidden = !hasView(name); });
+    dom.clear(panes); panes.hidden = !split;
+    if (split) state.split.views.forEach(function (name, index) {
+      var pane = el('section', { class: 'split-pane', 'data-pane': index }), select = el('select', { 'aria-label': '枠' + (index + 1) + 'の表示' });
+      [['map', '地図'], ['tiles', 'タイル'], ['list', '一覧'], ['detail', '詳細']].forEach(function (option) { select.appendChild(el('option', { value: option[0], text: option[1] })); });
+      select.value = name;
+      select.addEventListener('change', function () {
+        var other = state.split.views.indexOf(select.value), previous = state.split.views[index];
+        if (other >= 0) state.split.views[other] = previous;
+        state.split.views[index] = select.value; saveSplit();
+        if (!state.split.views.includes('detail')) S.adminViews.closeDetail();
+        layoutViews(); render();
+      });
+      pane.append(el('label', { class: 'pane-heading' }, [el('span', { text: '枠' + (index + 1), class: 'visually-hidden' }), select]), byId(name + '-view')); panes.appendChild(pane);
+    });
+    panes.dataset.count = state.split.count;
+    byId('admin-app').classList.toggle('is-split', split);
+    byId('split-count').hidden = !split; byId('summary-panel').hidden = split;
+    (split ? byId('header-notices') : document.body).appendChild(byId('toast'));
+    (split ? byId('header-notices') : byId('result-notices')).prepend(byId('new-notice'));
+    document.querySelectorAll('[data-split-count]').forEach(function (node) { var selected = Number(node.dataset.splitCount) === state.split.count; node.setAttribute('aria-pressed', String(selected)); node.classList.toggle('secondary', !selected); });
+    S.adminMap.resize(); S.adminViews.resizeDetail();
+    root.setTimeout(function () { if (state.token && state.d && cache().loaded) S.adminMap.initialView(groups()); }, 0);
+  }
+  function setSplitCount(count) {
+    if (![2, 3, 4].includes(count)) return;
+    if (state.split.count !== count) { S.adminViews.closeDetail(); state.split = { count: count, views: splitDefaults(count) }; saveSplit(); }
+    setView('split');
+  }
   function cache(id) {
     id = id || state.d;
     if (!state.caches.has(id)) state.caches.set(id, { items: new Map(), thumbs: new Map(), rev: 0, loaded: false });
@@ -78,11 +120,14 @@
     byId('result-count').textContent = '表示 ' + posts.length + ' / ' + all.length + '投稿（写真・動画 ' + posts.reduce(function (n, p) { return n + p.photos.length; }, 0) + '件）' + (state.selected.size ? '・選択 ' + state.selected.size + '投稿' : '');
     var unread = posts.filter(function (p) { return state.unread.has(state.d + ':' + p.pid); });
     byId('new-notice').hidden = !unread.length; byId('new-notice').textContent = '新着 ' + unread.length + '件';
+    var missing = posts.filter(function (p) { return !S.adminMap.located(p); }).length;
+    byId('unlocated-button').hidden = !missing; byId('unlocated-button').textContent = '位置なし ' + missing + '件';
     S.adminMap.render(posts); S.adminViews.render(posts);
   }
   function setView(view) {
+    if (view !== 'split') S.adminViews.closeDetail();
     state.view = view;
-    ['map', 'tiles', 'list'].forEach(function (name) { byId(name + '-view').hidden = view !== name; });
+    layoutViews();
     document.querySelectorAll('[data-view]').forEach(function (button) { var active = button.dataset.view === view; button.classList.toggle('secondary', !active); button.setAttribute('aria-pressed', String(active)); });
     render();
     if (view === 'map') {
@@ -91,10 +136,11 @@
     }
   }
   function logout(message) {
-    state.epoch++; state.token = ''; state.settings = {}; state.disasters = []; state.d = ''; state.sound = false;
+    state.epoch++; state.token = ''; state.settings = {}; state.disasters = []; state.d = '';
     state.caches.clear(); state.photos.clear(); state.unread.clear(); state.opened.clear(); state.selected.clear();
-    loading.clear(); root.clearTimeout(timer); root.clearTimeout(stateTimer); stateLoading = null; clearStored(); S.adminViews.close(); S.adminMap.destroy();
-    byId('print-mode').hidden = true; byId('admin-app').hidden = true; byId('login').hidden = false;
+    loading.clear(); root.clearTimeout(timer); root.clearTimeout(stateTimer); stateLoading = null; clearStored(); S.adminViews.close(); S.adminViews.closeDetail(); S.adminMap.destroy();
+    byId('print-mode').hidden = true; byId('admin-app').hidden = true; byId('login').hidden = false; document.body.classList.remove('admin-active');
+    document.body.appendChild(byId('toast'));
     dom.clear(byId('print-pages')); dom.clear(byId('summary-panel')); dom.clear(byId('tiles-view')); dom.clear(byId('list-view'));
     ['past-banner', 'connection-banner', 'version-banner', 'complete-banner', 'current-banner'].forEach(function (id) { dom.banner('warning', '', id); });
     byId('login-error').textContent = message || ''; byId('admin-pass').value = ''; byId('admin-pass').focus();
@@ -129,7 +175,7 @@
       if (index >= 0) state.disasters[index] = reply.disaster;
     }
     data.rev = Math.max(data.rev, Number(reply.rev) || 0); data.loaded = true;
-    if (fresh.size && state.sound) beep();
+    if (fresh.size && id === state.d) beep();
     persist(); return fresh;
   }
   async function load(full) {
@@ -194,7 +240,7 @@
   }
   async function switchDisaster(id) {
     if (!state.token) return;
-    S.adminViews.close(); S.adminMap.cancelEdit();
+    S.adminViews.close(); S.adminViews.closeDetail(); S.adminMap.cancelEdit();
     S.mediaCache.clear(); state.d = id; state.selected.clear(); S.adminMap.resetView();
     render(); if (cache().loaded) S.adminMap.initialView(groups()); persist(); await load(false); schedule();
   }
@@ -271,20 +317,30 @@
     var url = new root.URL('index.html', root.location.href); url.search = ''; url.hash = '';
     if (url.href !== state.settings.postPageUrl) await configure({ op: 'postPageUrl', url: url.href });
   }
-  function enableSound(enabled) {
-    state.sound = enabled;
-    if (enabled) {
-      try { var Audio = root.AudioContext || root.webkitAudioContext; if (!audio) audio = new Audio(); audio.resume().catch(function () { dom.toast('音を有効にできませんでした。'); }); }
-      catch (e) { state.sound = false; dom.toast('このPCでは通知音を使えません。'); }
-    }
+  function armSound() {
+    if (!state.token || state.sound === 'off') return;
+    try { var Audio = root.AudioContext || root.webkitAudioContext; if (!audio && Audio) audio = new Audio(); if (audio && audio.state === 'suspended') audio.resume().catch(function () {}); } catch (e) { /* 音が使えなくても文字で知らせる。 */ }
+  }
+  function enableSound(value) {
+    state.sound = /^[1-5]$/.test(String(value)) ? String(value) : 'off';
+    try { root.localStorage.setItem('spm-sound', state.sound); } catch (e) { /* 今の画面では選択を使う。 */ }
+    armSound();
   }
   function beep() {
-    if (!audio) return;
-    try { var oscillator = audio.createOscillator(), gain = audio.createGain(); oscillator.frequency.value = 880; gain.gain.setValueAtTime(0.06, audio.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.12); oscillator.connect(gain); gain.connect(audio.destination); oscillator.start(); oscillator.stop(audio.currentTime + 0.14); } catch (e) { /* 通知は文字でも表示する。 */ }
+    if (!state.token || state.sound === 'off' || !audio || audio.state !== 'running') return;
+    var patterns = { '1': [[1000, 0.12, 0]], '2': [[1200, 0.09, 0], [1200, 0.09, 0.16]], '3': [[1600, 0.07, 0], [1600, 0.07, 0.13], [1600, 0.07, 0.26]], '4': [[700, 0.15, 0], [1100, 0.15, 0.15]], '5': [[880, 0.6, 0]] };
+    var now = audio.currentTime;
+    try { patterns[state.sound].forEach(function (note) {
+      var oscillator = audio.createOscillator(), gain = audio.createGain(), start = now + note[2], end = start + note[1], ramp = state.sound === '5' ? 0.02 : 0.005;
+      oscillator.type = 'square'; oscillator.frequency.value = note[0];
+      gain.gain.setValueAtTime(0, start); gain.gain.linearRampToValueAtTime(0.15, start + ramp); gain.gain.setValueAtTime(0.15, end - ramp); gain.gain.linearRampToValueAtTime(0, end);
+      oscillator.connect(gain); gain.connect(audio.destination); oscillator.onended = function () { oscillator.disconnect(); gain.disconnect(); }; oscillator.start(start); oscillator.stop(end);
+    }); } catch (e) { /* 通知は文字でも表示する。 */ }
   }
+  function testSound() { armSound(); if (audio && audio.state === 'suspended') audio.resume().then(beep).catch(function () {}); else beep(); }
   async function enter() {
-    byId('login').hidden = true; byId('admin-app').hidden = false;
-    S.adminMap.init(); render(); await load(false); if (!state.token) return;
+    byId('login').hidden = true; byId('admin-app').hidden = false; document.body.classList.add('admin-active');
+    S.adminMap.init(); setView(state.view); await load(false); if (!state.token) return;
     await refreshState(); if (!state.token) return;
     await syncPostPage(); schedule(); scheduleState();
   }
@@ -311,7 +367,12 @@
     byId('disaster-select').addEventListener('change', function (event) { switchDisaster(event.target.value); });
     byId('reload').addEventListener('click', async function () { var button = byId('reload'); button.disabled = true; try { if (await refreshState()) await load(true); scheduleState(); } finally { button.disabled = false; } });
     document.querySelectorAll('[data-view]').forEach(function (button) { button.addEventListener('click', function () { setView(button.dataset.view); }); });
-    byId('new-notice').addEventListener('click', function () { var p = filtered().find(function (item) { return state.unread.has(state.d + ':' + item.pid); }); if (p) S.adminMap.focus(p.pid); });
+    document.querySelectorAll('[data-split-count]').forEach(function (button) { button.addEventListener('click', function () { setSplitCount(Number(button.dataset.splitCount)); }); });
+    byId('unlocated-button').addEventListener('click', S.adminMap.unlocated);
+    document.addEventListener('pointerdown', armSound); document.addEventListener('keydown', armSound);
+    if (root.ResizeObserver) new root.ResizeObserver(function () { S.adminMap.resize(); }).observe(byId('admin-map'));
+    root.addEventListener('resize', function () { S.adminMap.resize(); S.adminViews.resizeDetail(); });
+    byId('new-notice').addEventListener('click', function () { var p = filtered().find(function (item) { return state.unread.has(state.d + ':' + item.pid); }); if (p) { if (hasView('detail')) S.adminViews.detail(p.pid); else S.adminMap.focus(p.pid); } });
     document.addEventListener('visibilitychange', function () { schedule(); scheduleState(); S.mediaCache.resume(); if (!document.hidden) { prefetchRecent(); refreshState(); } });
     root.addEventListener('online', function () { if (isCurrent()) load(false); schedule(); });
     if (!S.api.getUrl()) { byId('login-error').textContent = '設定が済んでいません（config.js に GAS の URL を入れてください）'; byId('login-button').disabled = true; return; }
@@ -328,6 +389,6 @@
       await enter();
     }
   }
-  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, hover: hover, prefetchPost: prefetchPost, prefetchItem: prefetchItem, enablePrefetch: enablePrefetch, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
+  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, hasView: hasView, setSplitCount: setSplitCount, testSound: testSound, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, hover: hover, prefetchPost: prefetchPost, prefetchItem: prefetchItem, enablePrefetch: enablePrefetch, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
   document.addEventListener('DOMContentLoaded', function () { init().catch(function () { byId('login-error').textContent = '画面の準備ができませんでした。ページを読み直してください。'; }); });
 })(typeof window !== 'undefined' ? window : globalThis);

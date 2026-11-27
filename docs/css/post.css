@@ -7,6 +7,8 @@ main > h2 { margin-top: 0; }
 main button, main .button { min-height: 48px; }
 .home-actions { display: grid; gap: 12px; margin: 16px 0; }
 .home-actions button { min-height: 56px; font-size: 17px; text-align: left; justify-content: flex-start; padding: 10px 12px; }
+.resume-drafts { display: flex; width: 100%; margin: 12px 0 16px; }
+#photo-list { overflow-anchor: none; }
 .wide { width: 100%; }
 .back { margin-bottom: 16px; }
 .back + h2 { margin-top: 0; }

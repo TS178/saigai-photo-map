@@ -185,6 +185,16 @@
     var node = root.document.getElementById('send-button');
     if (node) { node.textContent = closed ? '送信待ちに入れる（受付停止中）' : '送る（' + list.length + '枚）'; node.disabled = processing || submitting || list.length === 0; node.setAttribute('aria-disabled', String(processing || submitting || list.length === 0 || missing > 0)); }
   }
+  async function changeCardLocation(record, patch, actionName) {
+    var scroll = { x: root.scrollX, y: root.scrollY };
+    Object.assign(record, patch); await persist(record);
+    if (view !== 'batch') return;
+    renderPhotoList();
+    var card = root.document.getElementById('card-' + record.id), trigger = card && card.querySelector('[data-location-action="' + actionName + '"]');
+    if (trigger) trigger.focus({ preventScroll: true });
+    root.scrollTo(scroll.x, scroll.y);
+    root.requestAnimationFrame(function () { if (view === 'batch' && trigger && trigger.isConnected) root.scrollTo(scroll.x, scroll.y); });
+  }
   function renderPhotoList() {
     var container = root.document.getElementById('photo-list'); if (!container) return;
     container.querySelectorAll('img').forEach(function (node) { root.URL.revokeObjectURL(node.src); objectUrls = objectUrls.filter(function (url) { return url !== node.src; }); });
@@ -201,11 +211,11 @@
       var choose = button('場所を決める', function () { openPlace(record.id); }, true);
       var same = button('前と同じ場所', async function () {
         var prev = list[index - 1];
-        if (prev && validPoint(prev)) { Object.assign(record, { lat: prev.lat, lng: prev.lng, acc: prev.acc, src: prev.src }); await persist(record); renderPhotoList(); }
-      }, true); same.disabled = index === 0 || !validPoint(list[index - 1]);
+        if (prev && validPoint(prev)) await changeCardLocation(record, { lat: prev.lat, lng: prev.lng, acc: prev.acc, src: prev.src }, 'same');
+      }, true); same.dataset.locationAction = 'same'; same.disabled = index === 0 || !validPoint(list[index - 1]);
       var unknown = button('場所が分からない', async function () {
-        if (root.confirm('位置なしで送ります。本部が地図に置きます。よろしいですか？')) { Object.assign(record, { lat: null, lng: null, acc: null, src: 'none' }); await persist(record); renderPhotoList(); }
-      }, true);
+        if (root.confirm('位置なしで送ります。本部が地図に置きます。よろしいですか？')) await changeCardLocation(record, { lat: null, lng: null, acc: null, src: 'none' }, 'unknown');
+      }, true); unknown.dataset.locationAction = 'unknown';
       var preview = button('', function () { previewPhoto(record, index, preview); }, true);
       preview.classList.add('photo-preview-button'); preview.setAttribute('aria-label', name + ' ' + (index + 1) + 'を大きく見る');
       preview.appendChild(image(record));
@@ -229,7 +239,10 @@
     var actions = el('div', { class: 'home-actions' }, [button('現在地で送る', function () { startMode('field'); }), button('場所を選んで送る', function () { startMode('batch'); })]);
     main.appendChild(actions);
     var current = drafts.filter(isCurrent);
-    if (current.length) main.appendChild(button('前の続き（' + current.length + '枚）', function () { startMode(current[current.length - 1].mode); }, true));
+    if (current.length) {
+      var resume = button('前の続き（' + current.length + '枚）', function () { startMode(current[current.length - 1].mode); }, true);
+      resume.classList.add('resume-drafts'); main.appendChild(resume);
+    }
     previousGroups(drafts).forEach(function (group) {
       var hasVideo = group.some(function (r) { return r.kind === 'video'; });
       var notice = el('div', { class: 'panel warning stack previous-drafts' }, [paragraph(previousLabel(group[0]) + (hasVideo ? 'で作りかけの写真・動画が ' : 'で作りかけの写真が ') + group.length + (hasVideo ? ' 件あります' : ' 枚あります'))]);
