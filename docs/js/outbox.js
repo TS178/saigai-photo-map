@@ -2,7 +2,7 @@
   'use strict';
   root.SPM = root.SPM || {};
   var database, running = false, sending = false, initialized = false, options = {}, owner, activeSend;
-  var reasons = { network: '電波が届きません', server: 'サーバーの返事を確認できません', busy: '混雑しています', closed: '受付停止中', code: '合言葉が変わりました', limit: '混み合っています', bad: '入力を確認してください' };
+  var reasons = { network: '電波が届きません', timeout: 'サーバーの返事を確認できません', server: 'サーバーの返事を確認できません', busy: '混雑しています', closed: '受付停止中', code: '合言葉が変わりました', limit: '混み合っています', bad: '入力を確認してください' };
   function open() {
     if (database) return database;
     database = new Promise(function (resolve, reject) {
@@ -22,7 +22,7 @@
     return new Promise(function (resolve, reject) {
       var tx = db.transaction(names, mode), result;
       tx.oncomplete = function () { resolve(result); };
-      tx.onabort = tx.onerror = function () { reject(new Error('写真を保存できません。空き容量を確認してください。下書きは消さずにやり直してください。')); };
+      tx.onabort = tx.onerror = function () { reject(new Error('端末の空きが足りないため保存できません。空き容量を確認し、下書きは消さずにやり直してください。')); };
       try { run(tx, function (value) { result = value; }); } catch (e) { tx.abort(); reject(e); }
     });
   }
@@ -30,8 +30,8 @@
   function put(name, record) { return transaction([name], 'readwrite', function (tx) { tx.objectStore(name).put(record); }); }
   async function remove(name, id) { await transaction([name], 'readwrite', function (tx) { tx.objectStore(name).delete(id); }); await changed(); }
   function saveDraft(record) {
-    if (!(record.img instanceof ArrayBuffer) || !(record.thumb instanceof ArrayBuffer)) return Promise.reject(new Error('写真を保存する形式が違います。'));
-    return put('draft', record);
+    if (!(record.img instanceof ArrayBuffer) || !(record.thumb instanceof ArrayBuffer)) return Promise.reject(new Error('写真・動画を保存する形式が違います。'));
+    return put('draft', record).catch(function (e) { if (record.kind === 'video') throw new Error('端末の空きが足りないため保存できません。空き容量とブラウザの設定を確認してください。'); throw e; });
   }
   async function enqueue(records) {
     // 読み取りから削除まで同じトランザクションに入れ、途中で写真を失わない。
@@ -73,6 +73,7 @@
         req.onsuccess = function () {
           var record = req.result; if (!record) return;
           record.disasterId = disaster.id; record.disasterName = disaster.name || '';
+          delete record.videoNext;
           if (name === 'outbox') { record.state = 'waiting'; record.attempts = 0; record.lastReason = ''; record.lastError = ''; record.updatedAt = Date.now(); }
           store.put(record);
         };
@@ -123,8 +124,17 @@
         // 応答を失っても同じIDのまま送り直す。
         record.state = 'sending'; record.updatedAt = Date.now(); record.attempts++; await put('outbox', record);
         sending = true; await changed();
-        reply = await root.SPM.api('upload', payload(record, auth.token));
-        if (reply.ok || ['network', 'server', 'busy'].indexOf(reply.error) < 0) break;
+        if (record.kind === 'video') {
+          reply = await root.SPM.video.upload(record, auth.token, function (p) {
+            // 大きな動画本体を塊ごとにIndexedDBへ書き直さない。再開位置は毎回サーバーに聞く。
+            record.videoNext = p.next;
+            if (options.onVideoProgress) options.onVideoProgress(p);
+          });
+        } else reply = await root.SPM.api('upload', payload(record, auth.token));
+        // 動画の送り直しはuploadの入口へ戻り、videoStartで位置を確かめる。
+        var retry = record.kind === 'video' ? root.SPM.video.retryAction(reply) === 'videoStart' : !reply.ok && ['network', 'server', 'busy'].indexOf(reply.error) >= 0;
+        if (!retry) break;
+        if (root.navigator.onLine === false) break;
       }
       sending = false; completed++;
       if (reply.ok) { await remember(record, reply); sent.push({ id: record.id, no: reply.no }); }

@@ -10,6 +10,9 @@
 .print-photos img { width: 100%; height: 100%; min-width: 0; min-height: 0; object-fit: contain; background: #f3f5f8; }
 .print-photos img:only-child { grid-column: 1 / -1; grid-row: 1 / -1; }
 .print-photos.photo-number-2 { grid-template-rows: 1fr; }
+.print-video { position: relative; margin: 0; min-width: 0; min-height: 0; overflow: hidden; }
+.print-video:only-child { grid-column: 1 / -1; grid-row: 1 / -1; }
+.print-video figcaption { position: absolute; bottom: 0; left: 0; right: 0; padding: 1mm; background: #fff; color: #000; border: 1px solid #737d8a; font-size: 9pt; font-weight: 700; text-align: center; }
 .print-information { display: grid; grid-template-columns: minmax(0, 1fr) 23mm; gap: 2mm; font-size: 9pt; line-height: 1.35; margin-top: 2mm; }
 .print-information p { margin: 0 0 1mm; white-space: pre-wrap; overflow-wrap: anywhere; }
 .print-qr canvas { display: block; width: 22mm; height: 22mm; image-rendering: pixelated; }

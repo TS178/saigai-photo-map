@@ -14,6 +14,7 @@
     var b64 = thumb(p);
     if (b64) card.appendChild(el('img', { src: 'data:image/jpeg;base64,' + b64, alt: 'No.' + p.no + 'の写真', draggable: 'false' }));
     else card.appendChild(el('span', { class: 'thumb-empty', text: '写真' }));
+    if (p.photos[0].kind === 'video') card.appendChild(el('span', { class: 'media-label', text: '▶ ' + (S.video.formatDuration(p.photos[0].duration) || '動画') }));
     if (!bundle) {
       card.appendChild(el('span', { class: 'photo-count', text: p.photos.length > 1 ? p.photos.length + '枚' : 'No.' + p.no }));
       if (p.urgent) card.appendChild(el('span', { class: 'urgent-label', text: '至急' }));
@@ -64,7 +65,7 @@
     markers.forEach(function (marker, pid) { if (!wanted.has(pid) && (!edit || edit.pid !== pid)) { cluster.removeLayer(marker); markers.delete(pid); } });
     posts.filter(located).forEach(function (p) {
       if (edit && edit.pid === p.pid) return;
-      var marker = markers.get(p.pid), preview = thumb(p), signature = JSON.stringify([p.lat, p.lng, p.cat, color(p.cat), p.urgent, p.hidden, p.status, p.photos.length, S.admin.state.unread.has(S.admin.state.d + ':' + p.pid)]);
+      var marker = markers.get(p.pid), preview = thumb(p), signature = JSON.stringify([p.lat, p.lng, p.cat, color(p.cat), p.urgent, p.hidden, p.status, p.photos.length, p.photos[0].kind, p.photos[0].duration, S.admin.state.unread.has(S.admin.state.d + ':' + p.pid)]);
       if (!marker) {
         marker = root.L.marker([p.lat, p.lng], { icon: icon(p), title: 'No.' + p.no + ' ' + p.cat + ' ' + p.status + (p.urgent ? ' 至急' : ''), keyboard: true, zIndexOffset: p.urgent ? 500 : 0 }); marker.spmPid = p.pid;
         marker.on('mouseover mouseout', function (event) { this.spmHovered = event.type === 'mouseover'; updateMarkerOrder(this); });
@@ -111,7 +112,7 @@
   }
   function flushRipples() {
     if (!map) return;
-    pendingRipples.forEach(function (pid) { var marker = markers.get(pid); if (marker && marker.getElement()) { S.mapbase.rippleMarker(marker); pendingRipples.delete(pid); } });
+    pendingRipples.forEach(function (pid) { var marker = markers.get(pid); if (marker && marker.getElement()) { map.spm.rippleMarker(marker); pendingRipples.delete(pid); } });
   }
   function ripple(pids) { pids.forEach(function (pid) { pendingRipples.add(pid); }); root.setTimeout(flushRipples, 350); }
   function resize() { if (map) root.setTimeout(function () { if (map) map.invalidateSize(); }, 0); }

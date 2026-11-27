@@ -19,11 +19,26 @@
       else layers[name] = L.tileLayer(config.tiles.osm, { minZoom: 9, maxZoom: 19, attribution: osmCredit });
       return layers[name];
     }
-    var controls = L.control({ position: 'topleft' }), panel = el('div', { class: 'base-panel', hidden: true }), buttons = {};
-    var locate = el('button', { type: 'button', class: 'map-locate', 'aria-label': '現在地を表示', text: '◎' });
+    // baseControl: 'above' は地図の直前の1行、既定の 'inside' は地図内の一覧。
+    var above = options.baseControl === 'above';
+    var controls = L.control({ position: 'topright' }), panel = el('div', { class: above ? 'base-row' : 'base-panel', hidden: !above, role: 'group', 'aria-label': '地図の種類' }), buttons = {};
+    var locate = el('button', { type: 'button', class: 'map-locate', 'aria-label': '現在地に移動' });
+    var svg = root.document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24'); svg.setAttribute('width', '20'); svg.setAttribute('height', '20'); svg.setAttribute('aria-hidden', 'true'); svg.setAttribute('focusable', 'false');
+    var aimCircle = root.document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    aimCircle.setAttribute('cx', '12'); aimCircle.setAttribute('cy', '12'); aimCircle.setAttribute('r', '7');
+    var aimLines = root.document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    aimLines.setAttribute('d', 'M12 1v6m0 10v6M1 12h6m10 0h6');
+    [aimCircle, aimLines].forEach(function (node) { node.setAttribute('fill', 'none'); node.setAttribute('stroke', 'currentColor'); node.setAttribute('stroke-width', '2'); svg.appendChild(node); });
+    locate.appendChild(svg);
     var toggle = el('button', { type: 'button', 'aria-expanded': 'false', text: '🗺️ 地図の種類' });
-    var controlsElement = el('div', { class: 'map-tools' }, [locate, toggle, panel]);
-    function showPanel(show) { panel.hidden = !show; toggle.setAttribute('aria-expanded', String(show)); }
+    var controlsElement = el('div', { class: 'map-tools' }, above ? [locate] : [locate, toggle, panel]);
+    if (above) element.parentNode.insertBefore(panel, element);
+    function fitPanel() {
+      controlsElement.style.setProperty('--map-panel-height', Math.max(1, map.getSize().y - 86) + 'px');
+      controlsElement.style.setProperty('--map-control-width', Math.max(1, map.getSize().x - 20) + 'px');
+    }
+    function showPanel(show) { if (above) return; fitPanel(); panel.hidden = !show; toggle.setAttribute('aria-expanded', String(show)); }
     function switchBase(name) {
       if (!['osm', 'photo', 'gsiStd'].includes(name)) name = 'osm';
       if (current) map.removeLayer(makeLayer(current));
@@ -34,7 +49,7 @@
       try { root.localStorage.setItem('spm-base', name); } catch (e) { /* 保存なしでも地図は使える。 */ }
       showPanel(false);
     }
-    [['osm', '標準地図'], ['photo', '航空写真'], ['gsiStd', '地理院地図（予備）']].forEach(function (item) {
+    (above ? [['osm', '標準'], ['photo', '航空写真'], ['gsiStd', '予備']] : [['osm', '標準地図'], ['photo', '航空写真'], ['gsiStd', '地理院地図（予備）']]).forEach(function (item) {
       var button = el('button', { type: 'button', 'data-label': item[1], text: item[1] });
       buttons[item[0]] = button; button.addEventListener('click', function () { switchBase(item[0]); }); panel.appendChild(button);
     });
@@ -59,7 +74,8 @@
     map.on('popupclose', function () { setDetailOpen(false); });
     map.on('click', function () { showPanel(false); if (Date.now() - opened >= 700) map.closePopup(); });
     map.on('zoomend', function () { notice.hidden = !(current === 'photo' && map.getZoom() < 14); });
-    map.on('unload', function () { removed = true; });
+    map.on('resize', fitPanel);
+    map.on('unload', function () { removed = true; if (above) panel.remove(); });
     var initial = 'osm'; try { initial = root.localStorage.getItem('spm-base') || initial; } catch (e) { /* 標準地図を使う。 */ }
     switchBase(initial);
     function rippleMarker(marker) {

@@ -23,6 +23,7 @@ test('公開する名前と.nojekyll', () => {
 });
 test('GAS・設定・Service Workerの版が一致する', () => {
   const gas = read('gas/Code.gs'), version = gas.match(/var APP_VERSION\s*=\s*'([^']+)'/)[1];
+  assert.equal(version, '1.1.0');
   assert.equal(gas.match(/var SPM_CODE_END\s*=\s*'([^']+)'/)[1], version);
   assert.match(gas.trimEnd().split('\n').pop(), /^var SPM_CODE_END = '[^']+';$/);
   assert.equal(read('docs/config.js').match(/expectedGasVersion:\s*'([^']+)'/)[1], version);
@@ -86,9 +87,9 @@ function topLevelDeclarations(source) {
 test('GASのトップレベルにconst・letがない', () => {
   assert.deepEqual(topLevelDeclarations(read('gas/Code.gs')), []);
 });
-test('公開設定のURLが空で、試験で作った秘密を配布ファイルに含まない', () => {
+test('公開設定のURLは空かGASの公開URLで、試験で作った秘密を配布ファイルに含まない', () => {
   const context = vm.createContext({ window: {} }); vm.runInContext(read('docs/config.js'), context);
-  assert.equal(context.window.SPM_CONFIG.gasUrl, '');
+  assert.match(context.window.SPM_CONFIG.gasUrl, /^(?:https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]+\/exec)?$/);
   const gas = createGas(); gas.call('setup_');
   const props = gas.props.getProperties(), P = gas.context.PROP;
   const secrets = [props[P.POST_CODE], props[P.ADMIN_PASS], props[P.SALT]];

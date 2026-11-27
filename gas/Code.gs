@@ -1,6 +1,10 @@
 // 災害写真マップの受け口です。「コード.gs」に全部貼り付けて保存してください。
+// この画面の「実行」は使いません。スプレッドシートを開き直し、
+// 上のメニュー「災害写真マップ」→「①最初の設定」から操作してください。
 // 直したら「デプロイを管理 → 編集 → 新しいバージョン」で公開し直してください。
-var APP_VERSION = '1.0.0';
+var APP_VERSION = '1.1.0';
+var VIDEO_CHUNK_BYTES = 2 * 1024 * 1024;
+var VIDEO_TYPES = { 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp', 'video/x-m4v': '.m4v' };
 var TZ = 'Asia/Tokyo';
 var PROP = {
   POST_CODE: '投稿の合言葉', ADMIN_PASS: '管理画面のパスワード', ACCEPT: '投稿の受付',
@@ -16,7 +20,7 @@ var PHOTO_FIELDS = {
   lat: '緯度', lng: '経度', acc: '位置の精度m', src: '位置の取り方', cat: '区分', urgent: '至急',
   note: 'コメント', who: '投稿者', org: '所属', status: '状況', memo: '対応メモ', hidden: '非表示',
   fileId: '写真ファイルID', url: '写真のURL', rev: '更新番号', updated: '更新日時', route: '受付経路',
-  ua: '端末', origLat: '元の緯度', origLng: '元の経度'
+  ua: '端末', origLat: '元の緯度', origLng: '元の経度', kind: '種類', duration: '長さ(秒)', sizeMB: '大きさ(MB)'
 };
 var THUMB_FIELDS = { id: '写真ID', thumb: 'サムネイル' };
 var LOG_FIELDS = { at: '日時', kind: '種類', text: '内容', from: 'どこから' };
@@ -27,8 +31,12 @@ var DEFAULT_CATEGORIES = [
   { name: '倒木・障害物', color: '#009E73' }, { name: '建物被害', color: '#CC79A7' },
   { name: '電柱・電線', color: '#F0E442' }, { name: 'その他', color: '#6B7280' }
 ];
-var SETTING_NAMES = ['地図の初期位置（座標）', '地図の初期の拡大（9〜18）', '10分あたりの受付上限（枚）', '1つの災害の受付上限（枚）', '管理画面の自動更新（秒）', '予備の窓口のURL（LoGoフォームなど・空でよい）', '投稿ページのURL（管理画面が自動で入れる）'];
+var SETTING_NAMES = ['地図の初期位置（座標）', '地図の初期の拡大（9〜18）', '10分あたりの受付上限（枚）', '1つの災害の受付上限（枚）', '管理画面の自動更新（秒）', '予備の窓口のURL（LoGoフォームなど・空でよい）', '投稿ページのURL（管理画面が自動で入れる）', '動画1本の上限（MB）', '1つの災害の動画の合計の上限（MB）'];
 var REQUEST_ = null;
+
+function はじめにお読みください() {
+  console.log('この画面の『実行』は使いません。スプレッドシートを開き直し、上のメニュー『災害写真マップ』→『①最初の設定』から操作してください。');
+}
 
 function nowMs_() { return Date.now(); }
 function dateText_(ms, pattern) { return Utilities.formatDate(new Date(ms === undefined ? nowMs_() : ms), TZ, pattern || 'yyyy/MM/dd HH:mm:ss'); }
@@ -137,7 +145,7 @@ function readSettings_() {
   return {
     categories: cats.length ? cats : [{ name: 'その他', color: '#6B7280' }], landmarks: marks,
     map: center && center.lat !== undefined ? { lat: center.lat, lng: center.lng, zoom: zoom } : null,
-    limits: { per10min: integerSetting_(values[SETTING_NAMES[2]], 300, 1, 1000000), perDisaster: integerSetting_(values[SETTING_NAMES[3]], 2000, 1, 1000000) },
+    limits: { per10min: integerSetting_(values[SETTING_NAMES[2]], 300, 1, 1000000), perDisaster: integerSetting_(values[SETTING_NAMES[3]], 2000, 1, 1000000), videoMaxMB: integerSetting_(values[SETTING_NAMES[7]], 100, 1, 1000000), videoTotalMB: integerSetting_(values[SETTING_NAMES[8]], 3000, 1, 1000000) },
     pollSeconds: integerSetting_(values[SETTING_NAMES[4]], 20, 2, 3600),
     backupFormUrl: safeHttps_(values[SETTING_NAMES[5]]), postPageUrl: safeHttps_(values[SETTING_NAMES[6]])
   };
@@ -243,10 +251,13 @@ function setup_() {
       setting.getRange(1, 1, 1, 9).setValues([['区分', '色', '', '目印', '座標（Googleマップの数字をそのまま貼る）', '', '', '項目', '値'].map(asText_)]).setFontWeight('bold');
       setting.setFrozenRows(1);
       DEFAULT_CATEGORIES.forEach(function (c, i) { setting.getRange(i + 2, 1, 1, 2).setValues([[asText_(c.name), asText_(c.color)]]); });
-      var defaults = ['', 13, 300, 2000, 20, '', ''];
+      var defaults = ['', 13, 300, 2000, 20, '', '', 100, 3000];
       SETTING_NAMES.forEach(function (name, i) { setting.getRange(i + 2, 8, 1, 2).setValues([[asText_(name), cellValue_(defaults[i])]]); });
       for (var col = 1; col <= 9; col++) setting.setColumnWidth(col, col === 8 ? 360 : 220);
     }
+    // 旧版の設定でも既存の値を保ち、動画の設定だけを補う。
+    var settingRows = setting.getDataRange().getValues();
+    [7, 8].forEach(function (i) { if (!settingRows.some(function (r) { return r[7] === SETTING_NAMES[i]; })) { setting.getRange(i + 2, 8, 1, 2).setValues([[asText_(SETTING_NAMES[i]), i === 7 ? 100 : 3000]]); } });
     if (!p[PROP.ROOT_FOLDER]) { changes[PROP.ROOT_FOLDER] = DriveApp.createFolder('災害写真マップ_写真').getId(); made.push('写真フォルダ'); }
     if (!p[PROP.SALT]) changes[PROP.SALT] = Utilities.getUuid() + Utilities.getUuid();
     if (!p[PROP.POST_CODE]) changes[PROP.POST_CODE] = generateCode_('');
@@ -344,11 +355,14 @@ function doPost(e) {
       case 'ping': return ping_();
       case 'hello': return hello_(data);
       case 'upload': return upload_(data);
+      case 'videoStart': return videoStart_(data);
+      case 'videoChunk': return videoChunk_(data);
       case 'resolve': return resolve_(data);
       case 'login': return login_(data);
       case 'state': return state_(data);
       case 'list': return list_(data);
       case 'photo': return photo_(data);
+      case 'media': return media_(data);
       case 'update': return update_(data);
       case 'config': return configure_(data);
       default: return fail_('bad', '指定された操作はありません。');
@@ -364,7 +378,7 @@ function hello_(data) {
   if (!cfg.accepting || !cfg.current) return fail_('closed');
   var lock = locked_('post'); if (lock) return lock;
   if (!normCode_(data.code) || normCode_(data.code) !== normCode_(cfg.props[PROP.POST_CODE])) return failure_('post', '投稿ページ');
-  return { ok: true, token: token_('post', cfg), version: APP_VERSION, disaster: { id: cfg.current.id, name: cfg.current.name, kind: cfg.current.kind }, categories: cfg.categories, landmarks: cfg.landmarks, map: cfg.map, backupFormUrl: cfg.backupFormUrl, limits: { maxPerPost: 20 } };
+  return { ok: true, token: token_('post', cfg), version: APP_VERSION, disaster: { id: cfg.current.id, name: cfg.current.name, kind: cfg.current.kind }, categories: cfg.categories, landmarks: cfg.landmarks, map: cfg.map, backupFormUrl: cfg.backupFormUrl, limits: { maxPerPost: 20, videoMaxMB: cfg.limits.videoMaxMB, videoTotalMB: cfg.limits.videoTotalMB } };
 }
 function webAppUrl_() { try { return ScriptApp.getService().getUrl() || ''; } catch (e) { return ''; } }
 function settings_(cfg) {
@@ -396,7 +410,7 @@ function jpegBytes_(text, max, label) {
   if (bytes.length < 2 || (bytes[0] & 255) !== 255 || (bytes[1] & 255) !== 216) bad_(label + 'を読み取れません。別の写真を選んでください。');
   return bytes;
 }
-function validatedUpload_(data, cfg) {
+function validatedUpload_(data, cfg, video) {
   if (!uuidValid_(data.id) || !uuidValid_(data.pid)) bad_('送る写真の情報を確認できませんでした。写真を選び直してください。');
   if (!Number.isInteger(data.n) || !Number.isInteger(data.of) || data.n < 1 || data.of < data.n || data.of > 50) bad_('写真の枚数を確認してください。');
   if (['gps', 'exif', 'map', 'gmap', 'landmark', 'none'].indexOf(data.src) < 0) bad_('位置の取り方を確認してください。');
@@ -405,7 +419,7 @@ function validatedUpload_(data, cfg) {
   } else if (!validPoint_(data.lat, data.lng)) bad_('緯度と経度を確認してください。');
   if (data.acc !== null && (typeof data.acc !== 'number' || !Number.isFinite(data.acc) || data.acc < 0)) bad_('位置の精度を確認してください。');
   if (typeof data.urgent !== 'boolean') bad_('至急の指定を確認してください。');
-  var bytes = jpegBytes_(data.img, 8000000, '写真');
+  var bytes = video ? null : jpegBytes_(data.img, 8000000, '写真');
   // 先頭の引用符を含めても1セル50,000字に収める。
   jpegBytes_(data.thumb, 49999, 'サムネイル（49,999字以内）');
   return {
@@ -414,7 +428,8 @@ function validatedUpload_(data, cfg) {
       acc: data.acc === null ? '' : data.acc, src: SOURCES[data.src], shot: cleanText_(data.shot, 40),
       cat: cfg.categories.some(function (c) { return c.name === data.cat; }) ? data.cat : 'その他', urgent: data.urgent,
       note: cleanText_(data.note, 500), who: cleanText_(data.who, 40), org: cleanText_(data.org, 40),
-      status: '未確認', memo: '', hidden: false, route: '投稿ページ', ua: deviceKind_(data.ua), origLat: '', origLng: ''
+      status: '未確認', memo: '', hidden: false, route: '投稿ページ', ua: deviceKind_(data.ua), origLat: '', origLng: '',
+      kind: video ? '動画' : '写真', duration: video && typeof data.duration === 'number' && Number.isFinite(data.duration) && data.duration >= 0 ? data.duration : '', sizeMB: video ? data.size / (1024 * 1024) : bytes.length / (1024 * 1024)
     }
   };
 }
@@ -425,7 +440,7 @@ function limitResult_(cfg, d, alreadyLocked) {
   var logKey = 'spm:limit:' + bucket, lock;
   if (!alreadyLocked) { lock = LockService.getScriptLock(); if (!lock.tryLock(5000)) return fail_('busy'); }
   try {
-    if (!cache_().get(logKey)) { log_('上限', '写真の受付上限に達しました。', '投稿ページ'); cache_().put(logKey, '1', 1200); }
+    if (!cache_().get(logKey)) { log_('上限', '写真・動画の受付上限に達しました。', '投稿ページ'); cache_().put(logKey, '1', 1200); }
   } finally { if (lock) lock.releaseLock(); }
   return fail_('limit');
 }
@@ -436,10 +451,11 @@ function duplicate_(sheet, id, d) {
   return found ? { ok: true, id: id, no: Number(found.no), dup: true } : null;
 }
 function safeFileName_(s, max) { return cleanText_(s).replace(/[\\/:*?"<>|\s]/g, '_').slice(0, max); }
-function photoName_(item) {
+function photoName_(item, extension) {
   var date = /^\d{4}\/\d{2}\/\d{2} \d{2}:\d{2}/.test(item.shot) ? item.shot : item.at;
   var stamp = date.slice(0, 10).replace(/\//g, '') + '-' + date.slice(11, 16).replace(':', '');
-  return safeFileName_('No' + String(item.no).padStart(4, '0') + '-' + item.n + '_' + stamp + '_' + item.cat + '_' + item.who, 76) + '.jpg';
+  extension = extension || '.jpg';
+  return safeFileName_('No' + String(item.no).padStart(4, '0') + '-' + item.n + '_' + stamp + '_' + item.cat + '_' + item.who, 80 - extension.length) + extension;
 }
 function upload_(data) {
   var cfg = getConfig_();
@@ -460,19 +476,7 @@ function upload_(data) {
     if (cfg.current.id !== dId || !postAuthorized_(data, cfg)) return fail_('code');
     duplicate = duplicate_(sheet, data.id, dId); if (duplicate) return duplicate;
     limited = limitResult_(cfg, cfg.current, true); if (limited) return limited;
-    var same = cachedJson_('spm:pid:' + dId + ':' + data.pid) || findRecord_(sheet, PHOTO_FIELDS, 'pid', data.pid);
-    var d = cfg.current, no = same ? Number(same.no) : Number(d.lastNo) + 1, item = valid.item;
-    item.no = no; item.at = dateText_(); item.updated = item.at; item.fileId = file.getId(); item.url = file.getUrl(); item.rev = nextRev_();
-    appendRecord_(sheet, PHOTO_FIELDS, item);
-    // 行が保存済みなら、後段で失敗しても写真そのものは保持する。再送は写真IDで重複判定する。
-    committed = true;
-    appendRecord_(spreadsheet_().getSheetByName('サムネ_' + dId), THUMB_FIELDS, { id: data.id, thumb: data.thumb });
-    writeRecord_(spreadsheet_().getSheetByName('災害一覧'), DISASTER_FIELDS, d.row, { lastNo: Math.max(Number(d.lastNo), no), posts: Number(d.posts) + (same ? 0 : 1), photos: Number(d.photos) + 1 });
-    var bucketKey = 'spm:up:' + Math.floor(nowMs_() / 600000);
-    cache_().put(bucketKey, String(Number(cache_().get(bucketKey) || 0) + 1), 1200);
-    cache_().put('spm:pid:' + dId + ':' + data.pid, JSON.stringify({ no: no }), 21600);
-    cache_().put('spm:id:' + data.id, JSON.stringify({ no: no, d: dId }), 21600);
-    invalidateConfig_();
+    recordMedia_(cfg, valid.item, data.thumb, file, function () { committed = true; });
   } finally {
     lock.releaseLock();
     if (!committed) file.setTrashed(true);
@@ -480,9 +484,147 @@ function upload_(data) {
   file.setName(photoName_(valid.item));
   return { ok: true, id: data.id, no: valid.item.no, dup: false };
 }
+// 呼び出し元がロックと受付・重複・上限の確認を済ませてから使う。
+function recordMedia_(cfg, item, thumb, file, onCommitted) {
+  var d = cfg.current, dId = d.id, sheet = spreadsheet_().getSheetByName('投稿_' + dId);
+  var same = cachedJson_('spm:pid:' + dId + ':' + item.pid) || findRecord_(sheet, PHOTO_FIELDS, 'pid', item.pid);
+  var no = same ? Number(same.no) : Number(d.lastNo) + 1;
+  item.no = no; item.at = dateText_(); item.updated = item.at; item.fileId = file.getId(); item.url = file.getUrl(); item.rev = nextRev_();
+  appendRecord_(sheet, PHOTO_FIELDS, item);
+  // 行の保存後はファイルを保持し、応答を失ってもIDで重複判定する。
+  if (onCommitted) onCommitted();
+  appendRecord_(spreadsheet_().getSheetByName('サムネ_' + dId), THUMB_FIELDS, { id: item.id, thumb: thumb });
+  writeRecord_(spreadsheet_().getSheetByName('災害一覧'), DISASTER_FIELDS, d.row, { lastNo: Math.max(Number(d.lastNo), no), posts: Number(d.posts) + (same ? 0 : 1), photos: Number(d.photos) + 1 });
+  var bucketKey = 'spm:up:' + Math.floor(nowMs_() / 600000);
+  cache_().put(bucketKey, String(Number(cache_().get(bucketKey) || 0) + 1), 1200);
+  cache_().put('spm:pid:' + dId + ':' + item.pid, JSON.stringify({ no: no }), 21600);
+  cache_().put('spm:id:' + item.id, JSON.stringify({ no: no, d: dId }), 21600);
+  invalidateConfig_();
+}
+function videoLimit_(cfg, size) {
+  var total = records_(spreadsheet_().getSheetByName('投稿_' + cfg.current.id), PHOTO_FIELDS).reduce(function (sum, r) { return sum + (r.kind === '動画' ? Number(r.sizeMB) || 0 : 0); }, 0);
+  if (size <= cfg.limits.videoMaxMB * 1024 * 1024 && total + size / (1024 * 1024) <= cfg.limits.videoTotalMB) return null;
+  var key = 'spm:videoLimit:' + cfg.current.id + ':' + Math.floor(nowMs_() / 600000);
+  if (!cache_().get(key)) {
+    log_('上限', '動画の大きさの上限に達しました。記録済み合計 ' + total + 'MB、今回 ' + size / (1024 * 1024) + 'MB、1本の上限 ' + cfg.limits.videoMaxMB + 'MB、合計の上限 ' + cfg.limits.videoTotalMB + 'MB。', '投稿ページ');
+    cache_().put(key, '1', 1200);
+  }
+  return fail_('limit', '動画の大きさが受付の上限を超えています。');
+}
+function videoRequest_(data, fn) {
+  var cfg = getConfig_();
+  if (!cfg.accepting || !cfg.current) return fail_('closed');
+  if (!postAuthorized_(data, cfg)) return fail_('code');
+  if (!uuidValid_(data.id)) return fail_('bad', '動画の情報を確認してください。');
+  var lock = LockService.getScriptLock();
+  try { lock.waitLock(20000); } catch (e) { return fail_('busy'); }
+  try {
+    readLockedProps_(); cfg = getConfig_(true);
+    if (!cfg.accepting || !cfg.current) return fail_('closed');
+    if (!postAuthorized_(data, cfg)) return fail_('code');
+    return fn(cfg);
+  } finally { lock.releaseLock(); }
+}
+function driveHeader_(reply, name) {
+  var headers = reply.getAllHeaders(), value = '';
+  Object.keys(headers).forEach(function (key) { if (key.toLowerCase() === name.toLowerCase()) value = String(headers[key]); });
+  return value;
+}
+function driveVideoPut_(session, start, bytes) {
+  var range = bytes ? 'bytes ' + start + '-' + (start + bytes.length - 1) + '/' + session.size : 'bytes */' + session.size;
+  return UrlFetchApp.fetch(session.url, { method: 'put', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'Content-Range': range }, contentType: session.mime, payload: bytes || [], muteHttpExceptions: true, followRedirects: false });
+}
+function videoReply_(session, reply) {
+  var status = reply.getResponseCode();
+  if (status === 404 || status === 410) { cache_().remove('spm:vid:' + session.item.id); return fail_('restart', '動画の送信期限が切れました。最初から送り直してください。'); }
+  if (status === 200 || status === 201) {
+    var fileId = JSON.parse(reply.getContentText()).id;
+    if (typeof fileId !== 'string' || !fileId) throw new Error('動画の保存を確認できませんでした。');
+    session.fileId = fileId; session.next = session.size;
+  } else if (status === 308) {
+    var range = driveHeader_(reply, 'Range'), match = /^bytes=0-(\d+)$/.exec(range);
+    if (range && !match) throw new Error('動画の続きの位置を確認できませんでした。');
+    session.next = match ? Number(match[1]) + 1 : 0;
+    if (session.next < 0 || session.next > session.size) throw new Error('動画の続きの位置が不正です。');
+  } else throw new Error('動画を保存できませんでした。');
+  cache_().put('spm:vid:' + session.item.id, JSON.stringify(session), 21600);
+  return null;
+}
+function finishVideo_(cfg, session) {
+  var limited = limitResult_(cfg, cfg.current, true) || videoLimit_(cfg, session.size);
+  if (limited) return limited;
+  var file = DriveApp.getFileById(session.fileId);
+  recordMedia_(cfg, session.item, session.thumb, file);
+  file.setName(photoName_(session.item, VIDEO_TYPES[session.mime]));
+  cache_().remove('spm:vid:' + session.item.id);
+  return { ok: true, done: true, id: session.item.id, no: session.item.no };
+}
+function videoStart_(data) {
+  return videoRequest_(data, function (cfg) {
+    if (typeof data.mime !== 'string' || !Object.prototype.hasOwnProperty.call(VIDEO_TYPES, data.mime) || !Number.isSafeInteger(data.size) || data.size <= 0) return fail_('bad', '動画の形式と大きさを確認してください。');
+    var valid = validatedUpload_(data, cfg, true), sheet = spreadsheet_().getSheetByName('投稿_' + cfg.current.id);
+    var duplicate = duplicate_(sheet, data.id, cfg.current.id); if (duplicate) return duplicate;
+    var limited = videoLimit_(cfg, data.size) || limitResult_(cfg, cfg.current, true); if (limited) return limited;
+    var key = 'spm:vid:' + data.id, session = cachedJson_(key);
+    if (session) {
+      if (session.d !== cfg.current.id) { cache_().remove(key); session = null; }
+      else {
+        if (session.size !== data.size || session.mime !== data.mime) return fail_('bad', '送信中の動画と情報が違います。');
+        var error = videoReply_(session, driveVideoPut_(session)); if (error) return error;
+        if (session.fileId) return finishVideo_(cfg, session);
+        return { ok: true, chunkSize: VIDEO_CHUNK_BYTES, next: session.next };
+      }
+    }
+    var reply = UrlFetchApp.fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id', {
+      method: 'post', contentType: 'application/json', headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), 'X-Upload-Content-Type': data.mime, 'X-Upload-Content-Length': String(data.size) },
+      payload: JSON.stringify({ name: data.id + VIDEO_TYPES[data.mime], parents: [cfg.current.folderId] }), muteHttpExceptions: true, followRedirects: false
+    });
+    var url = driveHeader_(reply, 'Location');
+    if ((reply.getResponseCode() !== 200 && reply.getResponseCode() !== 201) || !/^https:\/\/(?:www\.googleapis\.com|www\.google\.com)\//.test(url)) throw new Error('動画の送信先を用意できませんでした。');
+    session = { url: url, size: data.size, mime: data.mime, d: cfg.current.id, item: valid.item, thumb: data.thumb, next: 0 };
+    cache_().put(key, JSON.stringify(session), 21600);
+    return { ok: true, chunkSize: VIDEO_CHUNK_BYTES, next: 0 };
+  });
+}
+function videoChunk_(data) {
+  return videoRequest_(data, function (cfg) {
+    var duplicate = duplicate_(spreadsheet_().getSheetByName('投稿_' + cfg.current.id), data.id, cfg.current.id);
+    if (duplicate) return Object.assign(duplicate, { done: true });
+    var session = cachedJson_('spm:vid:' + data.id);
+    if (!session || session.d !== cfg.current.id) return fail_('restart', '動画の送信期限が切れました。最初から送り直してください。');
+    if (!Number.isSafeInteger(data.start) || data.start < 0 || data.start > session.size) return fail_('bad', '動画の続きの位置を確認してください。');
+    // 前回の応答が失われた場合も、Driveが受け取った位置を正とする。
+    var error = videoReply_(session, driveVideoPut_(session)); if (error) return error;
+    if (session.fileId) return finishVideo_(cfg, session);
+    if (data.start !== session.next) return fail_('offset', '動画の続きの位置から送り直してください。', { next: session.next });
+    if (typeof data.data !== 'string' || !data.data.length || data.data.length > Math.ceil(VIDEO_CHUNK_BYTES / 3) * 4 || data.data.length % 4 || !/^[A-Za-z0-9+/]+={0,2}$/.test(data.data)) return fail_('bad', '動画の分割データを確認してください。');
+    var bytes = Utilities.base64Decode(data.data), remaining = session.size - data.start;
+    if (!bytes.length || bytes.length > VIDEO_CHUNK_BYTES || bytes.length > remaining || bytes.length < remaining && bytes.length !== VIDEO_CHUNK_BYTES) return fail_('bad', '動画を指定された大きさに分けて送ってください。');
+    error = videoReply_(session, driveVideoPut_(session, data.start, bytes)); if (error) return error;
+    return session.fileId ? finishVideo_(cfg, session) : { ok: true, next: session.next };
+  });
+}
+function media_(data) {
+  var cfg = getConfig_(); if (!adminAuthorized_(data, cfg)) return fail_('auth');
+  if (!knownDisaster_(cfg, data.d)) return fail_('notfound');
+  if (!uuidValid_(data.id) || !Number.isSafeInteger(data.start) || data.start < 0 || !Number.isSafeInteger(data.length) || data.length < 1 || data.length > 8 * 1024 * 1024) return fail_('bad', '動画の読み込み範囲を確認してください。');
+  var item = findRecord_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS, 'id', data.id);
+  if (!item) return fail_('notfound');
+  if (item.kind !== '動画') return fail_('bad', '動画を選んでください。');
+  var file = DriveApp.getFileById(item.fileId); if (file.isTrashed()) return fail_('notfound');
+  var total = file.getSize(); if (data.start >= total) return fail_('bad', '動画の読み込み範囲を確認してください。');
+  var end = Math.min(total - 1, data.start + data.length - 1);
+  var reply = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + encodeURIComponent(item.fileId) + '?alt=media', { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken(), Range: 'bytes=' + data.start + '-' + end }, muteHttpExceptions: true, followRedirects: false });
+  if (reply.getResponseCode() !== 206 && !(reply.getResponseCode() === 200 && data.start === 0 && end === total - 1)) return fail_('server');
+  var bytes = reply.getBlob().getBytes(); if (bytes.length !== end - data.start + 1) return fail_('server');
+  return { ok: true, mime: file.getMimeType(), b64: Utilities.base64Encode(bytes), total: total };
+}
 function publicItem_(obj) {
   var result = {};
   Object.keys(PHOTO_FIELDS).forEach(function (key) { result[key] = obj[key]; });
+  result.kind = obj.kind === '動画' ? 'video' : 'photo';
+  result.duration = typeof obj.duration === 'number' ? obj.duration : '';
+  result.sizeMB = typeof obj.sizeMB === 'number' ? obj.sizeMB : '';
   result.src = Object.keys(SOURCES).filter(function (key) { return SOURCES[key] === obj.src; })[0] || 'none';
   result.urgent = obj.urgent === true || String(obj.urgent).toUpperCase() === 'TRUE';
   result.hidden = obj.hidden === true || String(obj.hidden).toUpperCase() === 'TRUE';
@@ -508,6 +650,7 @@ function photo_(data) {
   if (!uuidValid_(data.id)) return fail_('bad', '写真を確認できませんでした。一覧を読み直して選んでください。');
   var item = findRecord_(spreadsheet_().getSheetByName('投稿_' + data.d), PHOTO_FIELDS, 'id', data.id);
   if (!item) return fail_('notfound');
+  if (item.kind === '動画') return fail_('bad', '動画は動画の読み込みから開いてください。');
   var file = DriveApp.getFileById(item.fileId); if (file.isTrashed()) return fail_('notfound');
   return { ok: true, mime: 'image/jpeg', b64: Utilities.base64Encode(file.getBlob().getBytes()), name: file.getName() };
 }
@@ -655,9 +798,14 @@ function dialogClient_() {
     runner[fn].apply(runner, args);
   });
 }
-function showDialog_(title, body) { SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutput(dialogHtml_(title, body)).setWidth(540).setHeight(680), title); }
+function menuUi_() {
+  try { return SpreadsheetApp.getUi(); }
+  catch (e) { console.log('スプレッドシートの上のメニューから実行してください'); return null; }
+}
+function showDialog_(title, body) { var ui = menuUi_(); if (ui) ui.showModalDialog(HtmlService.createHtmlOutput(dialogHtml_(title, body)).setWidth(540).setHeight(680), title); }
 function onOpen() {
-  SpreadsheetApp.getUi().createMenu('災害写真マップ')
+  var ui = menuUi_(); if (!ui) return;
+  ui.createMenu('災害写真マップ')
     .addItem('①最初の設定', 'menuSetup').addItem('②受付を始める', 'menuStart').addItem('③受付を止める', 'menuStop')
     .addItem('④投稿の合言葉を変える', 'menuCode').addItem('⑤管理画面のパスワードを変える', 'menuAdminPass')
     .addItem('⑥いまの設定を見る', 'menuCurrent').addItem('⑦ロックを解除', 'menuUnlock').addToUi();
@@ -692,4 +840,4 @@ function dlgAdminPass(pass) { return setAdminPass_(pass, 'メニュー'); }
 function dlgUnlock() { return unlock_('メニュー'); }
 function dlgSetupHome(text) { var point = parseLocationText_(text); return !String(text || '').trim() ? { ok: true } : point && point.lat !== undefined ? setMapHome_(point.lat, point.lng, 13, 'メニュー') : fail_('bad', '地図の座標を読み取れませんでした。'); }
 
-var SPM_CODE_END = '1.0.0';
+var SPM_CODE_END = '1.1.0';

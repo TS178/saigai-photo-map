@@ -9,12 +9,124 @@ import { createGas } from './lib/gas-mock.mjs';
 const root = new URL('../', import.meta.url);
 function read(path) { return fs.readFileSync(new URL(path, root), 'utf8'); }
 function modules(extra = {}) {
-  const context = vm.createContext({ crypto: webcrypto, TextEncoder, ...extra });
-  for (const name of ['util', 'exif', 'coords', 'zip', 'export']) new vm.Script(read('docs/js/' + name + '.js'), { filename: name + '.js' }).runInContext(context);
+  const context = vm.createContext({ crypto: webcrypto, TextEncoder, btoa: value => Buffer.from(value, 'binary').toString('base64'), ...extra });
+  for (const name of ['util', 'exif', 'coords', 'zip', 'export', 'photo', 'video']) new vm.Script(read('docs/js/' + name + '.js'), { filename: name + '.js' }).runInContext(context);
   return context.SPM;
 }
 const S = modules();
 const plain = value => JSON.parse(JSON.stringify(value));
+
+test('動画：長さ・進み具合・形式の表示と上限超過はDOMなしで扱える', async () => {
+  for (const [value, expected] of [[0, '0:00'], [24.9, '0:24'], [60, '1:00'], [3723, '62:03'], [null, ''], [undefined, ''], [-1, ''], [Infinity, ''], [NaN, '']]) assert.equal(S.video.formatDuration(value), expected);
+  assert.equal(S.video.progressText(12 * 1024 * 1024, 4 * 1024 * 1024), '動画 12MB 中 4MB');
+  assert.equal(S.video.mimeType({ type: '', name: '現場.MOV' }), 'video/quicktime');
+  assert.equal(S.video.mimeType({ type: 'video/mp4; codecs=avc1' }), 'video/mp4');
+  assert.throws(() => S.video.mimeType({ type: 'image/jpeg', name: 'fake.mp4' }));
+  await assert.rejects(S.video.process({ size: 100 * 1024 * 1024 + 1 }, 100), /動画が大きすぎます（100MBまで）/);
+  await assert.rejects(S.video.process({ size: 2 * 1024 * 1024 }, 1), /動画が大きすぎます（1MBまで）/);
+  await assert.rejects(S.video.process({ size: 0 }, 100), /大きさを確認できません/);
+});
+
+test('動画：サーバー指定の塊・最後の端数・続きの位置を扱う', () => {
+  const chunk = 2 * 1024 * 1024, size = chunk * 2 + 7;
+  assert.deepEqual(plain(S.video.chunkRange(size, 0, chunk)), { start: 0, end: chunk });
+  assert.deepEqual(plain(S.video.chunkRange(size, chunk, chunk)), { start: chunk, end: chunk * 2 });
+  assert.deepEqual(plain(S.video.chunkRange(size, chunk * 2, chunk)), { start: chunk * 2, end: size });
+  assert.deepEqual(plain(S.video.chunkRange(size, size, chunk)), { start: size, end: size });
+  for (const next of [-1, 0.5, size + 1, undefined, null, NaN, '0']) { assert.equal(S.video.validNext(next, size), false); assert.throws(() => S.video.chunkRange(size, next, chunk)); }
+  for (const count of [0, -1, 300000, Infinity]) assert.throws(() => S.video.chunkRange(size, 0, count));
+});
+
+function videoRecord(size) {
+  const bytes = new Uint8Array(size); bytes.fill(47); bytes[size - 1] = 99;
+  return { id: randomUUID(), pid: randomUUID(), n: 2, of: 3, kind: 'video', mime: 'video/mp4', img: bytes.buffer, thumb: new Uint8Array([255, 216, 255, 217]).buffer, duration: 24, lat: 37, lng: 136, acc: null, src: 'map', cat: '道路・橋の損傷', urgent: false, note: '状況', who: '', org: '', ua: 'PC', shot: '2027/07/01 14:32:10' };
+}
+
+test('動画の送り直し：届いたか分からない失敗の次は位置確認、成功や入力エラーは再試行しない', () => {
+  for (const error of ['network', 'timeout', 'server', 'busy']) assert.equal(S.video.retryAction({ ok: false, error }), 'videoStart');
+  for (const error of ['bad', 'code', 'closed', 'limit', 'config']) assert.equal(S.video.retryAction({ ok: false, error }), null);
+  assert.equal(S.video.retryAction({ ok: true, done: true }), null);
+  assert.equal(S.video.retryAction({ ok: true, dup: true }), null);
+});
+
+test('動画送信：塊の返事だけを失った後は同じIDで位置を聞き、保存済みの塊を送らない', async () => {
+  const chunk = 256 * 1024;
+  for (const error of ['network', 'timeout', 'server', 'busy']) {
+    for (const reopen of [false, true]) {
+      const record = videoRecord(chunk + 3), actions = [];
+      let spm = modules(), received = 0, lost = false;
+      const api = async (action, data) => {
+        assert.equal(data.id, record.id);
+        actions.push([action, data.start]);
+        if (action === 'videoStart') return { ok: true, chunkSize: chunk, next: received };
+        assert.equal(data.start, received, 'サーバーが受領した塊を送り直さない');
+        received += Buffer.from(data.data, 'base64').length;
+        if (!lost) { lost = true; return { ok: false, error, next: 0 }; }
+        return { ok: true, done: true, no: 11 };
+      };
+      spm.api = api;
+      assert.equal((await spm.video.upload(record, 'test-token')).error, error);
+      // 保存位置が古くても、ページを開き直しても、サーバーの位置を優先する。
+      const saved = { ...record, videoNext: 0 };
+      if (reopen) spm = modules();
+      spm.api = api;
+      assert.equal((await spm.video.upload(saved, 'test-token')).no, 11);
+      assert.deepEqual(actions, [['videoStart', undefined], ['videoChunk', 0], ['videoStart', undefined], ['videoChunk', chunk]]);
+    }
+  }
+});
+
+test('動画送信：APIのnextから再開し、指定サイズと最後の端数を送る', async () => {
+  const spm = modules(), chunk = 2 * 1024 * 1024, record = videoRecord(chunk * 2 + 7), calls = [], progress = [];
+  spm.api = async (action, data, options) => {
+    calls.push(action); assert.equal(options.timeoutMs, 120000);
+    if (action === 'videoStart') {
+      assert.equal(data.size, record.img.byteLength); assert.equal(data.mime, record.mime); assert.equal(data.n, 2); assert.equal(data.of, 3); assert.equal(data.thumb, '/9j/2Q=='); assert.equal(data.img, undefined);
+      return { ok: true, chunkSize: chunk, next: chunk };
+    }
+    const bytes = Buffer.from(data.data, 'base64');
+    if (data.start === chunk) { assert.equal(bytes.length, chunk); return { ok: true, next: chunk * 2 }; }
+    assert.equal(data.start, chunk * 2); assert.equal(bytes.length, 7); assert.equal(bytes[6], 99);
+    return { ok: true, done: true, no: 8, id: record.id };
+  };
+  const reply = await spm.video.upload(record, 'test-token', p => progress.push(p.next));
+  assert.equal(reply.no, 8); assert.deepEqual(calls, ['videoStart', 'videoChunk', 'videoChunk']); assert.deepEqual(progress, [chunk, chunk * 2, record.img.byteLength]);
+});
+
+test('動画送信：offsetの位置へ合わせ、restartなら開始を聞き直す', async () => {
+  const chunk = 256 * 1024, spm = modules(), record = videoRecord(chunk + 3), actions = [];
+  const replies = [{ ok: true, chunkSize: chunk, next: 0 }, { ok: false, error: 'offset', next: chunk }, { ok: false, error: 'restart' }, { ok: true, chunkSize: chunk, next: chunk }, { ok: true, done: true, no: 9 }];
+  spm.api = async (action, data) => { actions.push([action, data.start]); return replies.shift(); };
+  const reply = await spm.video.upload(record, 'test-token');
+  assert.equal(reply.no, 9); assert.deepEqual(actions, [['videoStart', undefined], ['videoChunk', 0], ['videoChunk', chunk], ['videoStart', undefined], ['videoChunk', chunk]]);
+});
+
+test('動画送信：通信断後も開始APIで受領位置を確かめ、重複済みなら完了にする', async () => {
+  const chunk = 256 * 1024, spm = modules(), record = videoRecord(chunk + 3), actions = [];
+  const replies = [{ ok: true, chunkSize: chunk, next: 0 }, { ok: false, error: 'network' }, { ok: true, chunkSize: chunk, next: chunk }, { ok: true, done: true, no: 10 }, { ok: true, dup: true, no: 10 }];
+  spm.api = async (action, data) => { actions.push([action, data.start]); return replies.shift(); };
+  assert.equal((await spm.video.upload(record, 'test-token')).error, 'network');
+  assert.equal((await spm.video.upload(record, 'test-token')).no, 10);
+  assert.equal((await spm.video.upload(record, 'test-token')).dup, true);
+  assert.deepEqual(actions, [['videoStart', undefined], ['videoChunk', 0], ['videoStart', undefined], ['videoChunk', chunk], ['videoStart', undefined]]);
+});
+
+test('動画送信：不正なnext・完了記録なし・進まない返事では送信済みにしない', async () => {
+  const chunk = 256 * 1024, record = videoRecord(10);
+  for (const next of [-1, 11, null, '0', 0.5]) {
+    const spm = modules(); spm.api = async () => ({ ok: true, chunkSize: chunk, next });
+    assert.equal((await spm.video.upload(record, 'test-token')).error, 'server');
+  }
+  for (const response of [{ ok: true, chunkSize: chunk, next: 10 }, { ok: true, chunkSize: chunk, next: 0 }, { ok: false, error: 'restart' }]) {
+    const spm = modules(); let calls = 0;
+    spm.api = async () => { assert.ok(++calls < 10); return response; };
+    assert.equal((await spm.video.upload(record, 'test-token')).ok, false);
+  }
+  for (const error of ['code', 'closed', 'limit', 'bad']) {
+    const spm = modules(); spm.api = async () => ({ ok: false, error });
+    assert.equal((await spm.video.upload(record, 'test-token')).error, error);
+  }
+});
 
 test('合言葉の正規化は共通の例とGASの結果に一致する', () => {
   const gas = createGas();

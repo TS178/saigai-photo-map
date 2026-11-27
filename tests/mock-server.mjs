@@ -26,12 +26,22 @@ function stop(server) {
 }
 
 // メモリ内の偽GAS以外には接続しない。操作口はループバックでのみ公開する。
-export async function startMock({ sitePort = 0, gasPort = 0 } = {}) {
+export async function startMock({ sitePort = 0, gasPort = 0, videoChunkBytes } = {}) {
   const gas = createGas({ urlRoutes: [
     { url: 'https://maps.app.goo.gl/spm-test', response: { status: 302, headers: { Location: 'https://www.google.com/maps?q=37.0412,136.7790' } } }
   ] });
-  const echoes = new Map(), flags = { dropNextUploadResponse: false };
-  const metrics = { options: 0, redirects: 0, droppedUploads: 0, requests: [] };
+  if (videoChunkBytes !== undefined) {
+    if (!Number.isSafeInteger(videoChunkBytes) || videoChunkBytes < 256 * 1024 || videoChunkBytes % (256 * 1024)) throw new Error('試験の動画の塊は256KBの倍数で指定してください。');
+    gas.context.VIDEO_CHUNK_BYTES = videoChunkBytes;
+  }
+  const pausedVideoResponses = new Map();
+  const echoes = new Map(), flags = { dropNextUploadResponse: false, pauseAfterVideoChunk: false, failAfterVideoChunk: false };
+  const metrics = { options: 0, redirects: 0, droppedUploads: 0, requests: [], videoStarts: [], videoChunks: [], pausedVideoChunks: 0, failedVideoChunks: 0 };
+  function reply(res, value) {
+    for (const [key, entry] of echoes) if (entry.until < Date.now()) echoes.delete(key);
+    const key = randomUUID(); echoes.set(key, { value, until: Date.now() + 60000 }); metrics.redirects++;
+    res.writeHead(302, { Location: '/echo?key=' + key, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }); res.end();
+  }
   function state() {
     return {
       props: gas.props.getProperties(), now: gas.control.now,
@@ -54,6 +64,12 @@ export async function startMock({ sitePort = 0, gasPort = 0 } = {}) {
       if (url.pathname === '/test/flags' && req.method === 'POST') {
         const data = await body(req);
         if (typeof data.dropNextUploadResponse === 'boolean') flags.dropNextUploadResponse = data.dropNextUploadResponse;
+        if (typeof data.pauseAfterVideoChunk === 'boolean') flags.pauseAfterVideoChunk = data.pauseAfterVideoChunk;
+        if (typeof data.failAfterVideoChunk === 'boolean') flags.failAfterVideoChunk = data.failAfterVideoChunk;
+        if (data.pauseAfterVideoChunk === false) {
+          for (const [response, resume] of pausedVideoResponses) if (!response.destroyed) resume();
+          pausedVideoResponses.clear();
+        }
         json(res, { ok: true, flags }); return;
       }
       if (url.pathname === '/echo' && req.method === 'GET') {
@@ -64,12 +80,26 @@ export async function startMock({ sitePort = 0, gasPort = 0 } = {}) {
       if (url.pathname !== '/exec' || !['GET', 'POST'].includes(req.method)) { json(res, { ok: false, message: '受け口がありません。' }, 404); return; }
       const data = req.method === 'POST' ? await body(req) : Object.fromEntries(url.searchParams);
       const value = req.method === 'POST' ? gas.doPost(data) : gas.doGet(data);
+      if (data.a === 'videoStart') metrics.videoStarts.push({ id: data.id, next: value.next, dup: !!value.dup });
+      if (data.a === 'videoChunk') metrics.videoChunks.push({ id: data.id, start: data.start, next: value.next, done: !!value.done });
+      if (data.a === 'videoChunk' && value.ok && !value.done) {
+        // 塊の保存後に一度だけ503を返す。接続を切るとブラウザがPOSTを自動再送してしまう。
+        const fail = flags.failAfterVideoChunk; flags.failAfterVideoChunk = false;
+        const respond = () => {
+          if (fail) { metrics.failedVideoChunks++; json(res, { ok: false, message: '動画の塊は保存しましたが、正常な返事を返せませんでした。' }, 503); }
+          else reply(res, value);
+        };
+        if (flags.pauseAfterVideoChunk) {
+          flags.pauseAfterVideoChunk = false; metrics.pausedVideoChunks++;
+          // 進捗の撮影と圏外の確認が済んだら、pauseAfterVideoChunk:falseで返事を返す。
+          pausedVideoResponses.set(res, respond); res.once('close', () => pausedVideoResponses.delete(res));
+        } else respond();
+        return;
+      }
       if (data.a === 'upload' && value.ok && flags.dropNextUploadResponse) {
         flags.dropNextUploadResponse = false; metrics.droppedUploads++; req.socket.destroy(); return;
       }
-      for (const [key, entry] of echoes) if (entry.until < Date.now()) echoes.delete(key);
-      const key = randomUUID(); echoes.set(key, { value, until: Date.now() + 60000 }); metrics.redirects++;
-      res.writeHead(302, { Location: '/echo?key=' + key, 'Access-Control-Allow-Origin': '*', 'Cache-Control': 'no-store' }); res.end();
+      reply(res, value);
     } catch (error) { if (!res.destroyed) json(res, { ok: false, message: '試験用の要求を処理できませんでした。', detail: error.message }, 400); }
   });
   let gasOrigin;

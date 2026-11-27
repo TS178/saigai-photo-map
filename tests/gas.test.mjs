@@ -65,7 +65,7 @@ test('1 最初の設定は3回でも同じシート・フォルダ・認証情�
 test('2 pingは版・受付状態・種別を返し、停止中のhelloは先にclosedを返す', () => {
   const gas = createGas(); gas.call('setup_');
   const P = gas.context.PROP, code = gas.props.getProperty(P.POST_CODE), ping = gas.doGet({ a: 'ping' });
-  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.0.0', codeComplete: true, accepting: false, codeKind: 'digits' });
+  assert.deepEqual(ping, { ok: true, app: 'spm', version: '1.1.0', codeComplete: true, accepting: false, codeKind: 'digits' });
   assertError(gas.doPost({ a: 'hello', code }), 'closed');
   assertError(gas.doPost({ a: 'hello', code: uuid(gas) }), 'closed');
   assert.equal(gas.cache.get('spm:fail:post'), null);
@@ -437,4 +437,204 @@ test('19 stateは管理の通行証で外部の受付・合言葉・災害一覧
   assert.equal(next.disasters.find(d => d.id === env.d).state, '終了');
   gas.control.now += 2 * 86400000;
   assertError(state(env.adminToken), 'auth');
+});
+
+// 本番と同じ256KBの倍数にして、実データを比較できる小ささで分割する。
+const videoChunkBytes = 256 * 1024;
+function videoPayload(env, overrides = {}) {
+  env.gas.context.VIDEO_CHUNK_BYTES = videoChunkBytes;
+  const data = payload(env, { a: 'videoStart', mime: 'video/mp4', size: videoChunkBytes * 2 + 17, duration: 24.5, ...overrides });
+  delete data.img;
+  return data;
+}
+function videoBytes(size) { return Buffer.from(Array.from({ length: size }, (_, index) => index % 251)); }
+function sendVideoChunk(env, data, bytes, start) {
+  return env.gas.doPost({ a: 'videoChunk', token: env.postToken, id: data.id, start, data: bytes.subarray(start, start + videoChunkBytes).toString('base64') });
+}
+function completeVideo(env, data = videoPayload(env)) {
+  const bytes = videoBytes(data.size), begun = env.gas.doPost(data);
+  assert.equal(begun.ok, true); assert.equal(begun.next, 0);
+  let reply;
+  for (let start = 0; start < bytes.length; start += videoChunkBytes) { reply = sendVideoChunk(env, data, bytes, start); assert.equal(reply.ok, true); }
+  assert.equal(reply.done, true);
+  return { data, bytes, reply };
+}
+function videoSession(gas, id) { return JSON.parse(gas.cache.get('spm:vid:' + id)); }
+
+test('20 動画は3塊以上を1本に保存し、写真と通しの受付番号・集計・種類を持つ', () => {
+  const env = prepared(), { gas } = env, data = videoPayload(env, { of: 2, note: '=1+1' });
+  const bytes = videoBytes(data.size), beforeRev = Number(gas.props.getProperty(gas.context.PROP.REV));
+  const begun = gas.doPost(data);
+  assert.deepEqual(begun, { ok: true, chunkSize: videoChunkBytes, next: 0 });
+  const session = videoSession(gas, data.id), entry = gas.cache.entries.get('spm:vid:' + data.id);
+  assert.equal(entry.expires - gas.control.now, 6 * 3600000);
+  assert.equal(session.size, data.size); assert.equal(session.mime, data.mime); assert.equal(session.item.note, data.note);
+  const create = gas.requests.find(r => r.method === 'post');
+  assert.equal(create.headers.Authorization, 'Bearer ' + gas.control.oauthToken);
+  assert.equal(create.headers['X-Upload-Content-Length'], String(data.size));
+  assert.equal(JSON.parse(create.payload).parents[0], rows(gas, '災害一覧')[0]['写真フォルダID']);
+  for (const start of [0, videoChunkBytes]) {
+    assert.deepEqual(sendVideoChunk(env, data, bytes, start), { ok: true, next: start + videoChunkBytes });
+    assert.equal(rows(gas, '投稿_' + env.d).length, 0); assert.equal(liveFiles(gas).length, 0);
+  }
+  const done = sendVideoChunk(env, data, bytes, videoChunkBytes * 2);
+  assert.deepEqual(done, { ok: true, done: true, id: data.id, no: 1 });
+  assert.equal(gas.cache.get('spm:vid:' + data.id), null);
+  const file = liveFiles(gas)[0];
+  assert.deepEqual(Buffer.from(file.getBlob().getBytes().map(b => b & 255)), bytes);
+  assert.equal(file.getMimeType(), data.mime); assert.equal(file.getSize(), data.size);
+  assert.equal(file.getName(), 'No0001-1_20270701-1432_冠水・浸水_山田.mp4');
+  const saved = rows(gas, '投稿_' + env.d)[0];
+  assert.equal(saved['種類'], '動画'); assert.equal(saved['長さ(秒)'], 24.5); assert.equal(saved['大きさ(MB)'], data.size / (1024 * 1024));
+  assert.equal(saved['更新番号'], beforeRev + 1); assert.equal(saved['コメント'], '=1+1'); assert.equal(gas.sheets.get('投稿_' + env.d).formulas.size, 0);
+  assert.equal(rows(gas, 'サムネ_' + env.d)[0]['サムネイル'], jpeg);
+  assert.equal(gas.doPost(payload(env, { pid: data.pid, n: 2, of: 2 })).no, done.no);
+  const ds = rows(gas, '災害一覧')[0]; assert.equal(ds['投稿数'], 1); assert.equal(ds['写真枚数'], 2); assert.equal(ds['最後の受付番号'], 1);
+  const items = list(env).items; assert.equal(items[0].kind, 'video'); assert.equal(items[0].duration, 24.5); assert.equal(items[0].sizeMB, saved['大きさ(MB)']); assert.equal(items[1].kind, 'photo');
+  assert.equal(update(env, data.pid, { status: '確認済' }).items[0].kind, 'video');
+});
+
+test('21 応答を失ってもoffsetとvideoStartの照会で続きから送り、最後の応答消失も二重にしない', () => {
+  const env = prepared(), { gas } = env, data = videoPayload(env), bytes = videoBytes(data.size);
+  assert.equal(gas.doPost(data).ok, true);
+  gas.control.loseVideoReply = true;
+  assertError(sendVideoChunk(env, data, bytes, 0), 'server');
+  assert.equal(videoSession(gas, data.id).next, 0); // Driveだけが受領した状態。
+  const offset = sendVideoChunk(env, data, bytes, 0); assertError(offset, 'offset'); assert.equal(offset.next, videoChunkBytes);
+  assert.equal(gas.doPost(data).next, videoChunkBytes); assert.equal(gas.drive.sessions.size, 1);
+  assert.equal(sendVideoChunk(env, data, bytes, offset.next).next, videoChunkBytes * 2);
+  gas.control.loseVideoReply = true;
+  assertError(sendVideoChunk(env, data, bytes, videoChunkBytes * 2), 'server');
+  const done = gas.doPost(data); assert.equal(done.done, true); assert.equal(done.no, 1);
+  assert.equal(sendVideoChunk(env, data, bytes, videoChunkBytes * 2).dup, true);
+  assert.equal(gas.doPost(data).dup, true);
+  gas.cache.remove('spm:id:' + data.id); assert.equal(gas.doPost(data).dup, true);
+  assert.equal(liveFiles(gas).length, 1); assert.equal(rows(gas, '投稿_' + env.d).length, 1); assert.equal(rows(gas, 'サムネ_' + env.d).length, 1);
+  assert.equal(rows(gas, '災害一覧')[0]['写真枚数'], 1);
+  const uploadRanges = gas.requests.filter(r => r.method === 'put' && !r.headers['Content-Range'].startsWith('bytes */')).map(r => r.headers['Content-Range']);
+  assert.equal(uploadRanges.length, 3); assert.ok(gas.requests.some(r => r.headers?.['Content-Range'] === 'bytes */' + data.size));
+});
+
+test('22 キャッシュ消失・Driveの期限切れではrestart、古いセッションは再利用しない', () => {
+  const env = prepared(), { gas } = env, data = videoPayload(env), bytes = videoBytes(data.size);
+  assert.equal(gas.doPost(data).ok, true); assert.equal(sendVideoChunk(env, data, bytes, 0).ok, true);
+  const firstUrl = videoSession(gas, data.id).url; gas.drive.expireSession(firstUrl);
+  assertError(sendVideoChunk(env, data, bytes, videoChunkBytes), 'restart'); assert.equal(gas.cache.get('spm:vid:' + data.id), null);
+  assert.equal(gas.doPost(data).next, 0); assert.notEqual(videoSession(gas, data.id).url, firstUrl);
+  gas.cache.remove('spm:vid:' + data.id); assertError(sendVideoChunk(env, data, bytes, 0), 'restart');
+  assert.equal(gas.doPost(data).next, 0);
+  gas.drive.expireSession(videoSession(gas, data.id).url); assertError(gas.doPost(data), 'restart');
+  assert.equal(gas.doPost(data).next, 0);
+  for (let start = 0; start < bytes.length; start += videoChunkBytes) assert.equal(sendVideoChunk(env, data, bytes, start).ok, true);
+  assert.equal(rows(gas, '投稿_' + env.d).length, 1); assert.equal(liveFiles(gas).length, 1);
+});
+
+test('23 動画のmime・サイズ・共通項目・塊を検査し、各形式の拡張子と長さなしを扱う', () => {
+  const env = prepared(), { gas } = env;
+  for (const patch of [{ mime: 'image/jpeg' }, { mime: 'video/avi' }, { mime: '__proto__' }, { mime: ['video/mp4'] }, { size: 0 }, { size: -1 }, { size: 1.5 }, { size: '10' }, { size: Number.MAX_SAFE_INTEGER + 1 }, { pid: '不明' }, { urgent: 'true' }, { lat: 91 }, { thumb: '不明' }]) assertError(gas.doPost(videoPayload(env, patch)), 'bad');
+  assert.equal(gas.drive.sessions.size, 0);
+  const data = videoPayload(env), bytes = videoBytes(data.size); assert.equal(gas.doPost(data).ok, true);
+  assertError(gas.doPost({ ...data, size: data.size + 1 }), 'bad');
+  for (const patch of [{ start: -1 }, { start: 1.5 }, { start: '0' }, { data: '' }, { data: '!!!!' }, { data: Buffer.alloc(videoChunkBytes + 1).toString('base64') }, { data: bytes.subarray(0, 4).toString('base64') }]) {
+    assertError(gas.doPost({ a: 'videoChunk', token: env.postToken, id: data.id, start: 0, data: bytes.subarray(0, videoChunkBytes).toString('base64'), ...patch }), 'bad');
+  }
+  const offset = sendVideoChunk(env, data, bytes, videoChunkBytes); assertError(offset, 'offset'); assert.equal(offset.next, 0);
+  assert.equal(rows(gas, '投稿_' + env.d).length, 0);
+  for (const [mime, extension] of Object.entries({ 'video/mp4': '.mp4', 'video/quicktime': '.mov', 'video/webm': '.webm', 'video/3gpp': '.3gp', 'video/x-m4v': '.m4v' })) {
+    const sent = completeVideo(env, videoPayload(env, { size: 17, mime, duration: null }));
+    const item = list(env).items.find(r => r.id === sent.data.id), file = gas.drive.files.get(item.fileId);
+    assert.equal(file.getName().endsWith(extension), true); assert.equal(item.duration, ''); assert.equal(item.kind, 'video');
+  }
+});
+
+test('24 1本・災害の合計サイズの上限を記録し、送信開始後の上限変更も最終記録前に確認する', () => {
+  const env = prepared(), { gas } = env;
+  changeSetting(gas, '動画1本の上限（MB）', 1); changeSetting(gas, '1つの災害の動画の合計の上限（MB）', 1);
+  assertError(gas.doPost(videoPayload(env, { size: 1024 * 1024 + 1 })), 'limit'); assert.equal(gas.drive.sessions.size, 0);
+  completeVideo(env); // 0.5MB強。
+  assertError(gas.doPost(videoPayload(env)), 'limit'); assertError(gas.doPost(videoPayload(env)), 'limit');
+  const logs = rows(gas, '記録').filter(r => r['種類'] === '上限'); assert.equal(logs.length, 1); assert.match(logs[0]['内容'], /合計.*MB/);
+  changeSetting(gas, '1つの災害の動画の合計の上限（MB）', 2);
+  const second = videoPayload(env), bytes = videoBytes(second.size); assert.equal(gas.doPost(second).ok, true);
+  assert.equal(sendVideoChunk(env, second, bytes, 0).ok, true); assert.equal(sendVideoChunk(env, second, bytes, videoChunkBytes).ok, true);
+  changeSetting(gas, '1つの災害の動画の合計の上限（MB）', 1);
+  assertError(sendVideoChunk(env, second, bytes, videoChunkBytes * 2), 'limit'); assert.equal(rows(gas, '投稿_' + env.d).length, 1);
+  changeSetting(gas, '1つの災害の動画の合計の上限（MB）', 2);
+  assert.equal(sendVideoChunk(env, second, bytes, videoChunkBytes * 2).done, true); assert.equal(rows(gas, '投稿_' + env.d).length, 2);
+  // 上限ちょうどまでは許可し、過去の災害の動画は新しい災害の合計に入れない。
+  const started = config(env, { op: 'start', kind: '訓練', name: '動画の次の訓練' });
+  const next = { ...env, d: started.settings.current.id, postToken: gas.doPost({ a: 'hello', code: started.newCode }).token };
+  changeSetting(gas, '1つの災害の動画の合計の上限（MB）', 1);
+  completeVideo(next, videoPayload(next, { size: 1024 * 1024 }));
+  assertError(gas.doPost(videoPayload(next, { size: 1 })), 'limit');
+});
+
+test('25 10分の受付は塊数に関わらず1本を1件、重複確認は上限到達後も成功する', () => {
+  const env = prepared(), { gas } = env;
+  changeSetting(gas, '10分あたりの受付上限（枚）', 1);
+  const { data, bytes } = completeVideo(env);
+  const key = 'spm:up:' + Math.floor(gas.control.now / 600000); assert.equal(gas.cache.get(key), '1');
+  assert.equal(gas.doPost(data).dup, true); assert.equal(sendVideoChunk(env, data, bytes, 0).dup, true);
+  assertError(gas.doPost(videoPayload(env)), 'limit'); assertError(gas.doPost(payload(env)), 'limit');
+  gas.control.now += 600001; assert.equal(completeVideo(env).reply.ok, true);
+  changeSetting(gas, '1つの災害の受付上限（枚）', 2); assertError(gas.doPost(videoPayload(env)), 'limit');
+  assert.equal(rows(gas, '災害一覧')[0]['写真枚数'], 2);
+});
+
+test('26 mediaは管理認証とRangeで必要な部分だけを返し、photoは動画を拒否する', () => {
+  const env = prepared(), { gas } = env, { data, bytes } = completeVideo(env);
+  const readMedia = patch => gas.doPost({ a: 'media', token: env.adminToken, d: env.d, id: data.id, start: 0, length: 100, ...patch });
+  const first = readMedia(); assert.equal(first.ok, true); assert.equal(first.mime, data.mime); assert.equal(first.total, bytes.length);
+  assert.deepEqual(Buffer.from(first.b64, 'base64'), bytes.subarray(0, 100));
+  const tail = readMedia({ start: bytes.length - 7, length: 100 }); assert.deepEqual(Buffer.from(tail.b64, 'base64'), bytes.subarray(-7));
+  const rangeRequest = gas.requests.at(-1); assert.equal(rangeRequest.headers.Range, 'bytes=' + (bytes.length - 7) + '-' + (bytes.length - 1));
+  assert.match(rangeRequest.url, /\/files\/[^/]+\?alt=media$/); assert.equal(rangeRequest.headers.Authorization, 'Bearer ' + gas.control.oauthToken);
+  assert.equal(readMedia({ length: 8 * 1024 * 1024 }).ok, true);
+  for (const patch of [{ start: -1 }, { start: 0.5 }, { start: bytes.length }, { length: 0 }, { length: '1' }, { length: 8 * 1024 * 1024 + 1 }, { id: '不明' }]) assertError(readMedia(patch), 'bad');
+  assertError(readMedia({ token: env.postToken }), 'auth'); assertError(readMedia({ d: '不明' }), 'notfound'); assertError(readMedia({ id: uuid(gas) }), 'notfound');
+  assertError(gas.doPost({ a: 'photo', token: env.adminToken, d: env.d, id: data.id }), 'bad');
+  const photo = payload(env); assert.equal(gas.doPost(photo).ok, true); assertError(readMedia({ id: photo.id }), 'bad');
+  gas.drive.files.get(list(env).items.find(r => r.id === data.id).fileId).setTrashed(true); assertError(readMedia(), 'notfound');
+});
+
+test('27 動画も受付停止・古い通行証・災害切替・ロック待ちを守る', () => {
+  const env = prepared(), { gas } = env, data = videoPayload(env), bytes = videoBytes(data.size);
+  assertError(gas.doPost({ ...data, token: uuid(gas) }), 'code'); assert.equal(gas.doPost(data).ok, true);
+  gas.control.lockAvailable = false; assertError(sendVideoChunk(env, data, bytes, 0), 'busy'); gas.control.lockAvailable = true;
+  gas.call('stopAccepting_', false, 'メニュー'); assertError(gas.doPost({ ...data, token: '' }), 'closed'); assertError(sendVideoChunk(env, data, bytes, 0), 'closed');
+  gas.call('resumeAccepting_', 'メニュー'); gas.call('setPostCode_', null, 'メニュー'); assertError(sendVideoChunk(env, data, bytes, 0), 'code');
+  env.postToken = gas.doPost({ a: 'hello', code: gas.props.getProperty(gas.context.PROP.POST_CODE) }).token;
+  assert.equal(sendVideoChunk(env, data, bytes, 0).ok, true);
+  gas.control.onWaitLock = () => gas.call('stopAccepting_', false, 'メニュー'); assertError(sendVideoChunk(env, data, bytes, videoChunkBytes), 'closed');
+  const start = config(env, { op: 'start', kind: '訓練', name: '切替先' });
+  env.postToken = gas.doPost({ a: 'hello', code: start.newCode }).token;
+  assertError(sendVideoChunk(env, data, bytes, videoChunkBytes), 'restart'); assert.equal(rows(gas, '投稿_' + env.d).length, 0);
+});
+
+test('28 旧行の空欄は写真、追加列の補充・並べ替えと旧設定のH9・H10に対応する', () => {
+  const env = prepared(), { gas } = env, photo = payload(env); gas.doPost(photo);
+  const sheet = gas.sheets.get('投稿_' + env.d), kindCol = sheet.data[0].indexOf('種類'); sheet.data[1][kindCol] = '';
+  assert.equal(list(env).items[0].kind, 'photo');
+  for (const head of ['種類', '長さ(秒)', '大きさ(MB)']) { const col = sheet.data[0].indexOf(head); sheet.data.forEach(row => row.splice(col, 1)); }
+  const setting = gas.sheets.get('設定'); setting.getRange(9, 8, 2, 2).setValues([['', ''], ['', '']]);
+  assert.equal(gas.call('setup_').ok, true);
+  assert.deepEqual(sheet.data[0].slice(-3), ['種類', '長さ(秒)', '大きさ(MB)']);
+  assert.deepEqual(setting.data[8].slice(7, 9), ['動画1本の上限（MB）', 100]); assert.deepEqual(setting.data[9].slice(7, 9), ['1つの災害の動画の合計の上限（MB）', 3000]);
+  const names = sheet.data[0], a = names.indexOf('種類'), b = names.indexOf('コメント'); sheet.data.forEach(row => { [row[a], row[b]] = [row[b], row[a]]; });
+  const sent = completeVideo(env); assert.equal(list(env).items.find(r => r.id === sent.data.id).kind, 'video');
+  assert.equal(rows(gas, '投稿_' + env.d)[1]['種類'], '動画');
+  changeSetting(gas, '動画1本の上限（MB）', 7); gas.call('setup_'); assert.equal(gas.doPost({ a: 'state', token: env.adminToken }).settings.limits.videoMaxMB, 7);
+});
+
+test('29 最初の関数は案内だけで状態を変えず、エディタでのメニュー実行も案内で終わる', () => {
+  const source = fs.readFileSync(new URL('../gas/Code.gs', import.meta.url), 'utf8'); assert.equal(source.match(/^function\s+([^ (]+)/m)[1], 'はじめにお読みください');
+  const gas = createGas(), before = { ...gas.counters };
+  assert.equal(gas.call('はじめにお読みください'), undefined);
+  assert.deepEqual(gas.counters, before); assert.equal(gas.sheets.size, 0); assert.equal(gas.drive.folders.size, 1); assert.equal(gas.cache.entries.size, 0);
+  assert.match(gas.logs[0].text, /この画面の『実行』は使いません/);
+  gas.control.uiAvailable = false;
+  for (const fn of ['menuSetup', 'menuStart', 'menuStop', 'menuCode', 'menuAdminPass', 'menuCurrent', 'menuUnlock', 'onOpen']) assert.doesNotThrow(() => gas.call(fn));
+  assert.ok(gas.logs.filter(log => log.text === 'スプレッドシートの上のメニューから実行してください').length >= 8);
+  assert.equal(gas.ui.dialogs.length, 0); assert.equal(gas.ui.menus.length, 0);
+  for (const secret of Object.values(gas.props.getProperties()).filter(value => value.length >= 8)) assert.equal(JSON.stringify(gas.logs).includes(secret), false);
 });

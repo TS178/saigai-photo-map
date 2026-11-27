@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
   root.SPM = root.SPM || {};
-  var dom = root.SPM.dom, el = dom.el;
+  var dom = root.SPM.dom, el = dom.el, mediaActive = 0, mediaWaiting = [];
   function postLink(pageUrl, code, includeCode) {
     var url = new root.URL(pageUrl);
     if (url.protocol !== 'https:') throw new Error('https://で始まる投稿ページのリンクを入れてください。');
@@ -26,6 +26,47 @@
     var url = root.URL.createObjectURL(blob), link = el('a', { href: url, download: name, hidden: true });
     root.document.body.appendChild(link); link.click(); link.remove();
     root.setTimeout(function () { root.URL.revokeObjectURL(url); }, 60000);
+  }
+  function mediaBytes(b64) {
+    var binary = root.atob(b64), data = new Uint8Array(binary.length);
+    for (var i = 0; i < binary.length; i++) data[i] = binary.charCodeAt(i);
+    return data;
+  }
+  function mediaSlot() {
+    return new Promise(function (resolve) {
+      function enter() {
+        mediaActive++;
+        resolve(function () { mediaActive--; var next = mediaWaiting.shift(); if (next) next(); });
+      }
+      if (mediaActive < 2) enter(); else mediaWaiting.push(enter);
+    });
+  }
+  // 最初の応答で全体の大きさを確かめ、以後は8MBずつ、同時に2件まで。
+  async function loadMedia(d, id, onProgress, cancelled) {
+    var block = 8 * 1024 * 1024, total, mime, loaded = 0, parts = [];
+    function stopped() { return cancelled && cancelled(); }
+    async function part(start) {
+      if (stopped()) return;
+      var release = await mediaSlot(), reply;
+      try {
+        if (stopped()) return;
+        reply = await root.SPM.admin.request('media', { d: d, id: id, start: start, length: block }, { timeoutMs: 120000 });
+      } finally { release(); }
+      if (stopped()) return;
+      if (!reply.ok) throw new Error(reply.message || '動画を読み込めませんでした。');
+      if (!Number.isSafeInteger(reply.total) || reply.total <= 0 || !/^video\//.test(reply.mime || '')) throw new Error('動画の大きさや形式を確認できませんでした。');
+      if (total === undefined) { total = reply.total; mime = reply.mime; }
+      if (reply.total !== total || reply.mime !== mime) throw new Error('動画が変わりました。もう一度開いてください。');
+      var data = mediaBytes(reply.b64);
+      if (data.length !== Math.min(block, total - start)) throw new Error('動画を最後まで読み込めませんでした。');
+      parts[start / block] = data; loaded += data.length;
+      if (onProgress) onProgress({ total: total, loaded: loaded, text: '動画を読み込み中 ' + Math.round(total / 1048576 * 10) / 10 + 'MB 中 ' + Math.round(loaded / 1048576 * 10) / 10 + 'MB' });
+    }
+    await part(0);
+    for (var start = block; !stopped() && start < total; start += block * 2) {
+      await Promise.all([part(start), start + block < total ? part(start + block) : Promise.resolve()]);
+    }
+    return stopped() ? null : new Blob(parts, { type: mime });
   }
   function saveQr(canvas, name) {
     return new Promise(function (resolve, reject) {
@@ -53,5 +94,5 @@
     if (!code) box.appendChild(el('p', { text: '現在の合言葉を確認するには、パスワードでログインし直してください。' }));
     update(); return box;
   }
-  root.SPM.share = { postLink: postLink, drawQr: drawQr, saveQr: saveQr, download: download, createPanel: createPanel };
+  root.SPM.share = { postLink: postLink, drawQr: drawQr, saveQr: saveQr, download: download, createPanel: createPanel, loadMedia: loadMedia };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -6,3 +6,5 @@ tests/e2e/shots/*.png
 Thumbs.db
 desktop.ini
 .DS_Store
+# Codex への依頼文（作業が終わったら消す）
+_作業用/

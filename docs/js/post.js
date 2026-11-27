@@ -54,20 +54,25 @@
   }
   function image(record) {
     var url = root.URL.createObjectURL(new Blob([record.thumb], { type: 'image/jpeg' })); objectUrls.push(url);
-    return el('img', { src: url, alt: '選んだ写真', loading: 'lazy' });
+    var img = el('img', { src: url, alt: record.kind === 'video' ? '選んだ動画' : '選んだ写真', loading: 'lazy' });
+    if (record.kind !== 'video') return img;
+    return el('span', { class: 'video-thumb' }, [img, el('span', { class: 'video-label', text: '▶ ' + (S.video.formatDuration(record.duration) || '動画') })]);
   }
   function previewPhoto(record, index, trigger) {
     if (photoPreview) photoPreview.close();
-    var url = root.URL.createObjectURL(new Blob([record.img], { type: 'image/jpeg' }));
-    var dialog = el('dialog', { class: 'photo-preview', 'aria-label': '写真 ' + (index + 1) + 'の拡大表示' });
+    var isVideo = record.kind === 'video', name = isVideo ? '動画' : '写真';
+    var url = root.URL.createObjectURL(new Blob([record.img], { type: isVideo ? record.mime : 'image/jpeg' }));
+    var dialog = el('dialog', { class: 'photo-preview', 'aria-label': name + ' ' + (index + 1) + 'の拡大表示' });
     var close = button('閉じる', function () { dialog.close(); }, true);
     var photo = button('', function () { dialog.close(); });
     photo.className = 'preview-image'; photo.setAttribute('aria-label', '写真を閉じる');
-    photo.appendChild(el('img', { src: url, alt: '写真 ' + (index + 1) }));
-    dialog.append(close, photo);
+    var media;
+    if (isVideo) { media = el('video', { src: url, controls: '', playsinline: '', class: 'preview-video', 'aria-label': name + ' ' + (index + 1) }); dialog.append(close, media); }
+    else { photo.appendChild(el('img', { src: url, alt: '写真 ' + (index + 1) })); dialog.append(close, photo); }
     dialog.addEventListener('click', function (event) { if (event.target === dialog) dialog.close(); });
     var overflow = root.document.body.style.overflow;
     dialog.addEventListener('close', function () {
+      if (media) { media.pause(); media.removeAttribute('src'); media.load(); }
       root.URL.revokeObjectURL(url); dialog.remove();
       root.document.body.style.overflow = overflow;
       if (photoPreview === dialog) photoPreview = null;
@@ -83,7 +88,7 @@
     objectUrls.forEach(function (url) { root.URL.revokeObjectURL(url); }); objectUrls = [];
   }
   function navigate(next, replace) {
-    if (processing || submitting) { S.dom.toast('写真の保存が終わるまでお待ちください。'); return; }
+    if (processing || submitting) { S.dom.toast('保存が終わるまでお待ちください。'); return; }
     view = next;
     root.history[replace ? 'replaceState' : 'pushState']({ spm: next, mode: mode }, '', root.location.href);
     render();
@@ -133,13 +138,13 @@
     box.append(paragraph('区分を1つ選んでください'), categories, el('label', { class: 'urgent-label' }, [urgent, '！ 至急（人命・通行止めなど）']), el('label', { for: noteId, text: 'コメント（任意）' }), note, paragraph('キーボードのマイクで声でも入力できます', 'muted'));
     return box;
   }
-  function picker(label, capture) {
-    var input = el('input', { type: 'file', accept: 'image/*', multiple: !capture, 'aria-label': label });
+  function picker(label, capture, video) {
+    var input = el('input', { type: 'file', accept: video ? 'video/*' : 'image/*', multiple: !capture && !video, 'aria-label': label });
     if (capture) input.setAttribute('capture', 'environment');
-    input.addEventListener('change', action(async function () { var files = Array.from(input.files || []); input.value = ''; await addFiles(files); }));
+    input.addEventListener('change', action(async function () { var files = Array.from(input.files || []); input.value = ''; await addFiles(files, video); }));
     return el('label', { class: 'file-picker' }, [label, input]);
   }
-  async function addFiles(files) {
+  async function addFiles(files, video) {
     if (processing) return;
     processing = true;
     var importMode = mode, max = settings && settings.limits && settings.limits.maxPerPost || 20;
@@ -148,21 +153,25 @@
       for (var i = 0; i < files.length; i++) {
         var file = files[i], list = currentDrafts(), key = JSON.stringify([file.name, file.size, file.lastModified]);
         if (list.some(function (r) { return r.fileKey === key; })) continue;
-        if (mode === 'field' && list.length >= max) { S.dom.toast('1回の投稿は' + max + '枚までです。'); break; }
-        var status = root.document.getElementById('photo-progress'); if (status) status.textContent = (i + 1) + ' / ' + files.length + ' 枚を縮小して保存しています…';
+        if (mode === 'field' && list.length >= max) { S.dom.toast('1回の投稿は写真・動画あわせて' + max + '件までです。'); break; }
+        var status = root.document.getElementById('photo-progress'); if (status) status.textContent = video ? '動画を読み取って保存しています…' : (i + 1) + ' / ' + files.length + ' 枚を縮小して保存しています…';
+        var selectedPosition = mode === 'field' ? { lat: field.lat, lng: field.lng, acc: field.acc, src: field.src } : null;
         var processed;
-        try { processed = await S.photo.process(file); } catch (e) { S.dom.toast(e.message); continue; }
+        try { processed = video ? await S.video.process(file, settings && settings.limits && settings.limits.videoMaxMB) : await S.photo.process(file); } catch (e) { S.dom.toast(e.message); continue; }
+        processed.kind = video ? 'video' : 'photo';
         var previous = list[list.length - 1], values = mode === 'field' ? field : Object.assign(defaults(), previous ? { cat: previous.cat, note: previous.note } : {});
         var record = Object.assign({}, values, processed, { id: S.util.uuid(), mode: importMode, createdAt: Date.now(), order: list.length, disasterId: settings.disaster.id, disasterName: settings.disaster.name });
+        if (video && selectedPosition) Object.assign(record, selectedPosition);
         if (mode === 'batch' && processed.exif && validPoint(processed.exif)) Object.assign(record, { lat: processed.exif.lat, lng: processed.exif.lng, acc: null, src: 'exif' });
         // 次の写真を読む前に、今の1枚を確実に保存する。
-        await persist(record); drafts.push(record);
+        try { await persist(record); } catch (e) { dirty.delete(record.id); throw e; }
+        drafts.push(record);
         renderPhotoList();
       }
     } finally {
       processing = false;
       root.document.querySelectorAll('input[type=file]').forEach(function (node) { node.disabled = false; });
-      var statusEnd = root.document.getElementById('photo-progress'); if (statusEnd) statusEnd.textContent = '写真はこの端末に下書き保存されています。';
+      var statusEnd = root.document.getElementById('photo-progress'); if (statusEnd) statusEnd.textContent = '下書きはこの端末に保存されます。';
       updateSendButton();
     }
   }
@@ -172,7 +181,7 @@
   }
   function updateSendButton() {
     var list = currentDrafts(), missing = list.filter(function (r) { return !validPoint(r) && r.src !== 'none'; }).length;
-    var count = root.document.getElementById('missing-count'); if (count) count.textContent = '場所が決まっていない写真：' + missing + '枚';
+    var count = root.document.getElementById('missing-count'); if (count) count.textContent = '場所が未設定：' + missing + '件';
     var node = root.document.getElementById('send-button');
     if (node) { node.textContent = closed ? '受付停止中（送信待ちに保存）' : '送信する（' + list.length + '枚）'; node.disabled = processing || submitting || list.length === 0; node.setAttribute('aria-disabled', String(processing || submitting || list.length === 0 || missing > 0)); }
   }
@@ -181,44 +190,49 @@
     container.querySelectorAll('img').forEach(function (node) { root.URL.revokeObjectURL(node.src); objectUrls = objectUrls.filter(function (url) { return url !== node.src; }); });
     S.dom.clear(container);
     currentDrafts().forEach(function (record, index, list) {
+      var name = record.kind === 'video' ? '動画' : '写真';
       if (mode === 'field') {
-        container.appendChild(el('figure', {}, [image(record), el('figcaption', { text: '写真 ' + (index + 1) }), button('✕ 外す', function () { return deleteDraft(record); }, true)]));
+        container.appendChild(el('figure', {}, [image(record), el('figcaption', { text: name + ' ' + (index + 1) }), button('✕ 外す', function () { return deleteDraft(record); }, true)]));
         return;
       }
       var located = validPoint(record) || record.src === 'none';
       var card = el('article', { id: 'card-' + record.id, class: 'photo-card stack' + (located ? '' : ' unset'), tabindex: '-1' });
       var locationLabel = paragraph(positionText(record), located ? 'success' : 'error');
       var choose = button('場所を決める', function () { openPlace(record.id); }, true);
-      var same = button('前の写真と同じ場所', async function () {
+      var same = button(record.kind === 'video' || index > 0 && list[index - 1].kind === 'video' ? '前と同じ場所' : '前の写真と同じ場所', async function () {
         var prev = list[index - 1];
         if (prev && validPoint(prev)) { Object.assign(record, { lat: prev.lat, lng: prev.lng, acc: prev.acc, src: prev.src }); await persist(record); renderPhotoList(); }
       }, true); same.disabled = index === 0 || !validPoint(list[index - 1]);
-      var unknown = button('場所が分からない（本部であとで置く）', async function () {
-        if (root.confirm('位置なしで送ります。本部であとで場所を確認してもらいます。よろしいですか？')) { Object.assign(record, { lat: null, lng: null, acc: null, src: 'none' }); await persist(record); renderPhotoList(); }
+      var unknown = button('場所が分からない', async function () {
+        if (root.confirm('位置なしで送ります。本部が地図に置きます。よろしいですか？')) { Object.assign(record, { lat: null, lng: null, acc: null, src: 'none' }); await persist(record); renderPhotoList(); }
       }, true);
       var preview = button('', function () { previewPhoto(record, index, preview); }, true);
-      preview.classList.add('photo-preview-button'); preview.setAttribute('aria-label', '写真 ' + (index + 1) + 'を大きく見る');
+      preview.classList.add('photo-preview-button'); preview.setAttribute('aria-label', name + ' ' + (index + 1) + 'を大きく見る');
       preview.appendChild(image(record));
-      var info = el('div', { class: 'photo-card-info' }, [el('h3', { text: '写真 ' + (index + 1) }), paragraph('撮影日時：' + record.shot + (record.exif && record.exif.takenAt ? '' : '（ファイルの日時）')), locationLabel]);
+      var info = el('div', { class: 'photo-card-info' }, [el('h3', { text: name + ' ' + (index + 1) }), paragraph('撮影日時：' + record.shot + (record.exif && record.exif.takenAt ? '' : '（ファイルの日時）')), locationLabel]);
       card.append(el('div', { class: 'photo-card-heading' }, [preview, info]), choose);
       if (validPoint(record)) card.appendChild(link('Googleマップで確認', S.exporter.googleMapsUrl(record.lat, record.lng)));
-      card.append(same, unknown, metadata(record, function () { persist(record); }), button('✕ この写真を外す', function () { return deleteDraft(record); }, true));
+      card.append(same, unknown, metadata(record, function () { persist(record); }), button('✕ この' + name + 'を外す', function () { return deleteDraft(record); }, true));
       container.appendChild(card);
     });
     updateSendButton();
   }
   function startMode(next) {
-    mode = next; var list = currentDrafts(); field = Object.assign(defaults(), next === 'field' && list[0] || {}); manual = field.src === 'map';
+    mode = next; var list = currentDrafts(); field = defaults();
+    // 下書きの動画本体や種類を、次に選ぶ写真へ引き継がない。
+    if (next === 'field' && list[0]) ['lat', 'lng', 'acc', 'src', 'cat', 'urgent', 'note'].forEach(function (key) { field[key] = list[0][key]; });
+    manual = field.src === 'map';
     navigate(next);
   }
   function renderHome() {
-    heading('写真を送る');
-    var actions = el('div', { class: 'home-actions' }, [button('📷 いまいる場所で送る（現地）', function () { startMode('field'); }), button('🗂 あとから場所を決めて送る（まとめて）', function () { startMode('batch'); })]);
+    heading('写真・動画を送る');
+    var actions = el('div', { class: 'home-actions' }, [button('📷 いまいる場所で送る', function () { startMode('field'); }), button('🗂 あとで場所を決めて送る', function () { startMode('batch'); })]);
     main.appendChild(actions);
     var current = drafts.filter(isCurrent);
     if (current.length) main.appendChild(button('📝 前の続きがあります（' + current.length + '枚）', function () { startMode(current[current.length - 1].mode); }, true));
     previousGroups(drafts).forEach(function (group) {
-      var notice = el('div', { class: 'panel warning stack previous-drafts' }, [paragraph(previousLabel(group[0]) + 'で作りかけの写真が ' + group.length + ' 枚あります')]);
+      var hasVideo = group.some(function (r) { return r.kind === 'video'; });
+      var notice = el('div', { class: 'panel warning stack previous-drafts' }, [paragraph(previousLabel(group[0]) + (hasVideo ? 'で作りかけの写真・動画が ' : 'で作りかけの写真が ') + group.length + (hasVideo ? ' 件あります' : ' 枚あります'))]);
       notice.append(button('今の受付で使う', async function () {
         await flush(); await S.outbox.useCurrent('draft', group.map(function (r) { return r.id; }), settings.disaster);
         drafts = await S.outbox.all('draft'); startMode(group[group.length - 1].mode);
@@ -263,7 +277,7 @@
       S.outbox.send().catch(function (e) { S.dom.toast(e.message); }); return true;
     }
     if (reply.error === 'network' && settings && value && value === settingsCode) {
-      token = settings.token; announce('通信できません。前回の設定で続けます。写真は送信待ちに保存できます。'); navigate('home', true); return true;
+      token = settings.token; announce('通信できません。前回の設定で続けます。写真・動画は送信待ちに保存できます。'); navigate('home', true); return true;
     }
     var message = reply.error === 'code' ? (error ? '合言葉が違います' : '合言葉が変わりました。新しい合言葉を入れてください') : reply.error === 'locked' ? 'しばらく確認できません（あと約' + reply.retryMinutes + '分）' : reply.message;
     if (reply.error === 'closed') { closed = true; announce('いまは投稿の受付をしていません'); }
@@ -271,12 +285,12 @@
     return false;
   }
   function renderField() {
-    mode = 'field'; heading('① 写真を選ぶ・② 場所を確認', true);
-    main.appendChild(el('div', { class: 'row' }, [picker('📷 撮る', true), picker('🖼 写真を選ぶ', false)]));
+    mode = 'field'; heading('写真・動画と場所を確認', true);
+    main.appendChild(el('div', { class: 'row media-pickers' }, [picker('📷 撮る', true), picker('🖼 写真を選ぶ', false), picker('🎥 動画', false, true)]));
     main.append(paragraph('', 'muted'), el('p', { id: 'photo-progress', role: 'status' }), el('div', { id: 'photo-list', class: 'thumb-list' }), el('p', { id: 'gps-status', text: validPoint(field) ? positionText(field) : '現在地を確認しています…', role: 'status' }));
     var mapElement = el('div', { class: 'map', 'aria-label': '投稿する場所の地図' }); main.appendChild(mapElement);
     var home = validPoint(field) ? Object.assign({}, field, { zoom: 16 }) : mapHome();
-    map = S.mapbase.createMap(mapElement, Object.assign({}, home, { mobile: true, onLocate: function (p) { manual = false; updateFieldPosition(p, false); } }));
+    map = S.mapbase.createMap(mapElement, Object.assign({}, home, { mobile: true, baseControl: 'above', onLocate: function (p) { manual = false; updateFieldPosition(p, false); } }));
     if (validPoint(field)) mapPin(field, true, function (p) { updateFieldPosition(p, true); });
     map.on('click', function (event) { updateFieldPosition({ lat: event.latlng.lat, lng: event.latlng.lng, acc: null }, true); });
     main.appendChild(el('div', { class: 'row' }, [button('地図で場所を決める', function () { openPlace('field'); }, true), button('現在地に戻す', async function () {
@@ -293,8 +307,8 @@
     });
   }
   function renderBatch() {
-    mode = 'batch'; heading('① 写真・② 1枚ずつ場所を決める', true);
-    main.append(picker('🖼 写真を選ぶ（何枚でも）', false), el('p', { id: 'photo-progress', role: 'status' }), el('p', { id: 'missing-count', role: 'status' }), el('div', { id: 'photo-list', class: 'stack' }));
+    mode = 'batch'; heading('写真ごとに場所を決める', true);
+    main.append(el('div', { class: 'row media-pickers' }, [picker('🖼 写真を選ぶ', false), picker('🎥 動画', false, true)]), paragraph('動画も1本ずつ場所を決めます。', 'muted'), el('p', { id: 'photo-progress', role: 'status' }), el('p', { id: 'missing-count', role: 'status' }), el('div', { id: 'photo-list', class: 'stack' }));
     sendFooter(); renderPhotoList();
   }
   function sendFooter() {
@@ -335,7 +349,7 @@
     fields.append(el('label', { for: 'landmark', text: '目印から選ぶ' }), landmarks, el('label', { for: 'location-text', text: 'Googleマップの座標やリンクを貼る' }), input, read);
     main.append(fields, mapElement, status, check, confirm);
     var home = picked ? Object.assign({}, picked, { zoom: 16 }) : mapHome();
-    map = S.mapbase.createMap(mapElement, Object.assign({}, home, { mobile: true, onLocate: function (p) { pick(p, true); } }));
+    map = S.mapbase.createMap(mapElement, Object.assign({}, home, { mobile: true, baseControl: 'above', onLocate: function (p) { pick(p, true); } }));
     if (picked) pick(picked, false);
     map.on('click', function (event) { pick({ lat: event.latlng.lat, lng: event.latlng.lng, src: 'map' }, false); });
   }
@@ -378,7 +392,7 @@
   }
   function renderSending() {
     heading('③ 送信しています');
-    main.append(el('p', { id: 'send-progress', text: '0 / ' + (result ? result.total : 0) + ' 枚', role: 'status' }), el('progress', { id: 'send-bar', value: 0, max: result ? result.total : 1 }), paragraph('このままお待ちください。電波が弱くても写真は送信待ちに残ります。'));
+    main.append(el('p', { id: 'send-progress', text: '0 / ' + (result ? result.total : 0) + ' 枚', role: 'status' }), el('progress', { id: 'send-bar', value: 0, max: result ? result.total : 1 }), el('p', { id: 'video-send-progress', role: 'status' }), paragraph('このままお待ちください。写真・動画は送信待ちに残ります。'));
   }
   function renderResult() {
     heading('送信の結果'); result = result || { sent: 0, waiting: pending, nos: [] };
@@ -423,10 +437,12 @@
       group.forEach(function (r) { notice.appendChild(el('article', { class: 'queue-row' }, [image(r), el('div', {}, [paragraph(S.util.formatJst(new Date(r.createdAt))), paragraph(r.cat), paragraph('今の受付で送るか、消すかを選んでください。')])])); });
     });
     records.filter(function (r) { return history || !isPrevious(r); }).forEach(function (r) {
-      var body = el('div', {}, [paragraph(history ? '✓ 受付番号 No.' + r.no : r.state === 'bad' ? '！ 送れない写真' : '⏳ 送信待ち'), paragraph(S.util.formatJst(new Date(r.sentAt || r.createdAt))), paragraph(r.cat), paragraph(r.lastReason || (history ? '送信済み' : '電波が戻ると自動で送ります'))]);
-      if (!history) body.appendChild(button('この写真を消す', async function () {
+      var name = r.kind === 'video' ? '動画' : '写真';
+      var body = el('div', {}, [paragraph(history ? '✓ 受付番号 No.' + r.no : r.state === 'bad' ? '！ 送れない' + name : '⏳ 送信待ち'), paragraph(S.util.formatJst(new Date(r.sentAt || r.createdAt))), paragraph(r.cat), paragraph(r.lastReason || (history ? '送信済み' : '電波が戻ると自動で送ります'))]);
+      if (!history && r.kind === 'video') body.appendChild(el('p', { id: 'video-progress-' + r.id, role: 'status', text: S.video.progressText(r.size, r.videoNext || 0) }));
+      if (!history) body.appendChild(button('この' + name + 'を消す', async function () {
         if (S.outbox.isSending()) { S.dom.toast('送信が終わってから消してください。'); return; }
-        if (root.confirm('この写真を送信待ちから消します。元に戻せません。よろしいですか？')) { await S.outbox.remove('outbox', r.id); render(); }
+        if (root.confirm('この' + name + 'を送信待ちから消します。元に戻せません。よろしいですか？')) { await S.outbox.remove('outbox', r.id); render(); }
       }, true));
       listElement.appendChild(el('article', { class: 'queue-row' }, [image(r), body]));
     });
@@ -452,7 +468,7 @@
     if (reply.ok) return;
     if (reply.error === 'code') { token = ''; navigate('login', true); var p = main.querySelector('[role=alert]'); if (p) p.textContent = '合言葉が変わりました。新しい合言葉を入れてください'; }
     else if (reply.error === 'closed') { closed = true; announce('いまは投稿の受付をしていません'); }
-    else if (reply.error === 'limit') announce('混み合っています。写真は送信待ちに残っています。');
+    else if (reply.error === 'limit') announce('混み合っています。写真・動画は送信待ちに残っています。');
     else if (reply.error === 'locked') announce('しばらく確認できません（あと約' + reply.retryMinutes + '分）');
     else if (reply.error === 'bad') S.dom.toast(reply.message);
   }
@@ -460,7 +476,7 @@
     var node = root.document.getElementById('in-app');
     if (!/ Line\/|FBAN|FBAV|Instagram/i.test(root.navigator.userAgent)) { node.hidden = true; return; }
     S.dom.clear(node); node.hidden = false;
-    node.appendChild(paragraph('アプリの中では写真の保存などがうまく動かないことがあります。「ブラウザで開き直す」を押してください'));
+    node.appendChild(paragraph('アプリの中では写真・動画の保存などがうまく動かないことがあります。「ブラウザで開き直す」を押してください'));
     var url = new URL('index.html', root.location.href); url.searchParams.set('openExternalBrowser', '1'); if (code) url.hash = 'k=' + encodeURIComponent(code);
     var open = el('a', { class: 'button', text: 'ブラウザで開き直す', href: url.href, target: '_blank', rel: 'noopener' }); node.appendChild(open);
   }
@@ -478,7 +494,7 @@
     if (version !== authVersion) return;
     if (ping.ok) { codeKind = ping.codeKind; closed = !ping.accepting; }
     if (closed) announce('いまは投稿の受付をしていません');
-    if (!ping.ok && settings) announce('通信できません。前回の設定で続けます。写真は送信待ちに保存できます。');
+    if (!ping.ok && settings) announce('通信できません。前回の設定で続けます。写真・動画は送信待ちに保存できます。');
     if (code && !closed) await login(code);
     else { view = settings && code && code === settingsCode ? 'home' : 'login'; navigate(view, true); }
     await S.outbox.changed();
@@ -505,10 +521,15 @@
     if (!S.api.getUrl()) { S.dom.clear(main); heading('設定が済んでいません'); main.appendChild(paragraph('受付の接続先が設定されていません。管理担当の方に確認してください。', 'error')); return; }
     if ('serviceWorker' in root.navigator && (root.location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(root.location.hostname))) root.navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function () { S.dom.toast('オフライン用の保存ができませんでした。通信できる場所でお使いください。'); });
     if (root.navigator.storage && root.navigator.storage.persist) root.navigator.storage.persist().catch(function () {});
-    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(e.message, 'error'); S.dom.clear(main); heading('写真を保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
+    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(e.message, 'error'); S.dom.clear(main); heading('写真・動画を保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
     S.outbox.start({
       getAuth: function () { return { token: closed ? '' : token, disasterId: settings && settings.disaster.id }; },
       onReply: handleReply,
+      onVideoProgress: function (p) {
+        var text = root.document.getElementById('video-send-progress'), queued = root.document.getElementById('video-progress-' + p.id);
+        if (text) text.textContent = p.text;
+        if (queued) queued.textContent = p.text;
+      },
       onProgress: function (p) { var text = root.document.getElementById('send-progress'), bar = root.document.getElementById('send-bar'); if (text) text.textContent = p.completed + ' / ' + p.total + ' 枚'; if (bar) { bar.max = p.total; bar.value = p.completed; } }
     });
     root.addEventListener('spm-outbox', function (event) {
@@ -524,7 +545,7 @@
     // 起動中に別の合言葉入りリンクを開いた場合も取りこぼさない。
     openChangedLink();
     root.addEventListener('popstate', function (event) {
-      if (processing || submitting) { root.history.pushState({ spm: view, mode: mode }, '', root.location.href); S.dom.toast('写真を保存しています。少しお待ちください。'); return; }
+      if (processing || submitting) { root.history.pushState({ spm: view, mode: mode }, '', root.location.href); S.dom.toast('保存しています。少しお待ちください。'); return; }
       view = event.state && event.state.spm || 'home'; mode = event.state && event.state.mode || mode;
       if (view === 'sending') view = 'result';
       render();

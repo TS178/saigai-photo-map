@@ -1,10 +1,12 @@
 (function (root) {
 'use strict';
-const CACHE_VERSION = 'spm-1.0.0';
+const CACHE_VERSION = 'spm-1.1.0';
+// 同じ製品版の修正でも、保存済みの古い動画送信処理を入れ替える。
+const APP_CACHE = CACHE_VERSION + '-video-resume-1';
 const APP_FILES = [
   './index.html', './help.html', './config.js', './css/common.css', './css/post.css',
   './js/util.js', './js/dom.js', './js/api.js', './js/exif.js', './js/coords.js',
-  './js/export.js', './js/geo.js', './js/photo.js', './js/outbox.js', './js/mapbase.js', './js/post.js',
+  './js/export.js', './js/geo.js', './js/photo.js', './js/video.js', './js/outbox.js', './js/mapbase.js', './js/post.js',
   './vendor/leaflet/leaflet.js', './vendor/leaflet/leaflet.css',
   './vendor/leaflet/images/layers.png', './vendor/leaflet/images/layers-2x.png',
   './vendor/leaflet/images/marker-icon.png', './vendor/leaflet/images/marker-icon-2x.png', './vendor/leaflet/images/marker-shadow.png',
@@ -14,7 +16,7 @@ const scopeUrl = new URL('./', self.location.href);
 const allowed = new Set(APP_FILES.map(function (path) { return new URL(path, scopeUrl).href; }));
 self.addEventListener('install', function (event) {
   event.waitUntil((async function () {
-    const cache = await caches.open(CACHE_VERSION);
+    const cache = await caches.open(APP_CACHE);
     await cache.addAll(APP_FILES.map(function (path) { return new Request(new URL(path, scopeUrl), { cache: 'reload' }); }));
     await self.skipWaiting();
   })());
@@ -22,12 +24,12 @@ self.addEventListener('install', function (event) {
 self.addEventListener('activate', function (event) {
   event.waitUntil((async function () {
     const keys = await caches.keys();
-    await Promise.all(keys.filter(function (key) { return key.startsWith('spm-') && key !== CACHE_VERSION; }).map(function (key) { return caches.delete(key); }));
+    await Promise.all(keys.filter(function (key) { return key.startsWith('spm-') && key !== APP_CACHE; }).map(function (key) { return caches.delete(key); }));
     await self.clients.claim();
   })());
 });
 async function networkFirst(request, key, timeoutMs) {
-  const cache = await caches.open(CACHE_VERSION), controller = new AbortController();
+  const cache = await caches.open(APP_CACHE), controller = new AbortController();
   const timer = timeoutMs ? setTimeout(function () { controller.abort(); }, timeoutMs) : null;
   try {
     const response = await fetch(request, { signal: controller.signal, cache: 'no-store' });
@@ -48,7 +50,7 @@ self.addEventListener('fetch', function (event) {
   if (url.href === new URL('config.js', scopeUrl).href) { event.respondWith(networkFirst(event.request, url.href, 3000)); return; }
   if (event.request.mode === 'navigate') { event.respondWith(networkFirst(event.request, url.href)); return; }
   event.respondWith((async function () {
-    const cache = await caches.open(CACHE_VERSION), saved = await cache.match(url.href);
+    const cache = await caches.open(APP_CACHE), saved = await cache.match(url.href);
     if (saved) return saved;
     const response = await fetch(event.request);
     if (response.ok) await cache.put(url.href, response.clone());

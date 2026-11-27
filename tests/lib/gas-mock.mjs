@@ -8,7 +8,8 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
   const counters = { propReads: 0, propWrites: 0, sheetReads: 0, sheetWrites: 0, fetches: 0 };
   const control = {
     now: typeof now === 'string' ? Date.parse(now) : now,
-    lockAvailable: true, lockHeld: false, released: 0, onWaitLock: null, onCreateFile: null,
+    lockAvailable: true, lockHeld: false, released: 0, onWaitLock: null, onCreateFile: null, uiAvailable: true,
+    loseVideoReply: false, oauthToken: crypto.randomUUID(),
     webAppUrl: 'https://script.google.com/macros/s/mock/exec'
   };
   const values = new Map(Object.entries(props).map(([key, value]) => [key, String(value)]));
@@ -158,7 +159,7 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
     };
     return result;
   }
-  const drive = { folders: new Map(), files: new Map() };
+  const drive = { folders: new Map(), files: new Map(), sessions: new Map(), expireSession(url) { required(drive.sessions, url, '送信先').expired = true; } };
   function folder(name, parent = null, id = 'folder-' + crypto.randomUUID()) {
     const result = {
       id, name, parent, children: [], fileIds: [],
@@ -171,6 +172,7 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
           getId: () => fileId, getName: () => fileName, setName(value) { fileName = String(value); return file; },
           setTrashed(value) { trashed = value; return file; }, isTrashed: () => trashed,
           getBlob: () => blob(data.getBytes(), data.getContentType(), fileName),
+          getSize: () => data.getBytes().length, getMimeType: () => data.getContentType(),
           getUrl: () => 'https://drive.google.com/file/d/' + fileId + '/view'
         };
         drive.files.set(fileId, file); result.fileIds.push(fileId);
@@ -194,15 +196,62 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
     if (typeof urlRoutes === 'function') reply = urlRoutes(request, requests);
     else {
       const route = urlRoutes.find(item => typeof item.url === 'function' ? item.url(url) : item.url instanceof RegExp ? item.url.test(url) : item.url === url);
-      reply = route ? (typeof route.response === 'function' ? route.response(request, requests) : route.response || route) : { status: 404, body: '模擬応答なし' };
+      reply = route ? (typeof route.response === 'function' ? route.response(request, requests) : route.response || route) : undefined;
     }
+    if (reply === undefined) reply = driveFetch(url, options) || { status: 404, body: '模擬応答なし' };
     if (reply instanceof Error) throw reply;
     if (!reply) throw new Error('模擬応答がありません。');
     return {
       getResponseCode: () => reply.status ?? 200,
       getHeaders: () => ({ ...reply.headers }), getAllHeaders: () => ({ ...reply.headers }),
-      getContentText: () => typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {})
+      getContentText: () => typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {}),
+      getBlob: () => blob(reply.bytes ?? Buffer.from(typeof reply.body === 'string' ? reply.body : JSON.stringify(reply.body ?? {})), reply.mime || 'application/octet-stream')
     };
+  }
+  function driveFetch(url, options) {
+    const header = name => Object.entries(options.headers || {}).find(([key]) => key.toLowerCase() === name.toLowerCase())?.[1];
+    const isDrive = url.startsWith('https://www.googleapis.com/upload/drive/') || url.startsWith('https://www.googleapis.com/drive/');
+    if (!isDrive) return null;
+    if (header('Authorization') !== 'Bearer ' + control.oauthToken) return { status: 401 };
+    const method = (options.method || 'get').toLowerCase();
+    if (method === 'post' && url === 'https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id') {
+      const meta = JSON.parse(options.payload), size = Number(header('X-Upload-Content-Length')), mime = header('X-Upload-Content-Type');
+      if (!Number.isSafeInteger(size) || size < 1 || !drive.folders.has(meta.parents?.[0])) return { status: 400 };
+      const location = 'https://www.googleapis.com/upload/drive/v3/files?upload_id=' + crypto.randomUUID();
+      drive.sessions.set(location, { url: location, size, mime, meta, bytes: Buffer.alloc(0), fileId: null, expired: false, expires: control.now + 7 * 86400000 });
+      return { status: 200, headers: { Location: location } };
+    }
+    if (method === 'put' && drive.sessions.has(url)) {
+      const session = drive.sessions.get(url);
+      if (session.expired || session.expires <= control.now) return { status: 410 };
+      const received = () => session.fileId ? { status: 200, body: { id: session.fileId } } : { status: 308, headers: session.bytes.length ? { Range: 'bytes=0-' + (session.bytes.length - 1) } : {} };
+      const contentRange = String(header('Content-Range') || '');
+      if (contentRange === 'bytes */' + session.size) return received();
+      const match = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(contentRange);
+      if (!match) return { status: 400 };
+      if (session.fileId) return received();
+      const [, start, end, total] = match.map(Number), bytes = unsigned(options.payload || []);
+      if (total !== session.size || start !== session.bytes.length) return { status: 409 };
+      if (end !== start + bytes.length - 1 || end >= total || !bytes.length || end + 1 < total && bytes.length % (256 * 1024) !== 0) return { status: 400 };
+      session.bytes = Buffer.concat([session.bytes, bytes]);
+      if (session.bytes.length === session.size) {
+        const file = drive.folders.get(session.meta.parents[0]).createFile(blob(session.bytes, session.mime, session.meta.name));
+        session.fileId = file.getId();
+      }
+      if (control.loseVideoReply) { control.loseVideoReply = false; throw new Error('模擬の動画応答消失'); }
+      return received();
+    }
+    const media = /^https:\/\/www\.googleapis\.com\/drive\/v3\/files\/([^/?]+)\?alt=media$/.exec(url);
+    if (method === 'get' && media) {
+      const file = drive.files.get(decodeURIComponent(media[1]));
+      if (!file || file.isTrashed()) return { status: 404 };
+      const bytes = unsigned(file.getBlob().getBytes()), range = /^bytes=(\d+)-(\d+)$/.exec(String(header('Range') || ''));
+      if (!range) return { status: 200, bytes, mime: file.getMimeType() };
+      const start = Number(range[1]), end = Math.min(Number(range[2]), bytes.length - 1);
+      if (start > end || start >= bytes.length) return { status: 416 };
+      return { status: 206, bytes: bytes.subarray(start, end + 1), mime: file.getMimeType(), headers: { 'Content-Range': 'bytes ' + start + '-' + end + '/' + bytes.length } };
+    }
+    return null;
   }
   class MockDate extends Date {
     constructor(...args) { super(...(args.length ? args : [control.now])); }
@@ -222,7 +271,7 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
   const context = vm.createContext({
     Date: MockDate,
     PropertiesService: { getScriptProperties: () => properties },
-    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet, getUi: () => ui, flush() {} },
+    SpreadsheetApp: { getActiveSpreadsheet: () => spreadsheet, getUi() { if (!control.uiAvailable) throw new Error('エディタではUIを取得できません。'); return ui; }, flush() {} },
     DriveApp: { getRootFolder: () => drive.root, createFolder: name => drive.root.createFolder(name), getFolderById: id => required(drive.folders, id, 'フォルダ'), getFileById: id => required(drive.files, id, '写真') },
     CacheService: { getScriptCache: () => cache },
     LockService: { getScriptLock: () => ({
@@ -241,7 +290,7 @@ export function createGas({ props = {}, now = Date.parse('2026-11-26T03:00:00Z')
     },
     ContentService: { createTextOutput: textOutput, MimeType: { JSON: 'application/json' } },
     HtmlService: { createHtmlOutput: htmlOutput },
-    ScriptApp: { getService: () => ({ getUrl: () => control.webAppUrl }) },
+    ScriptApp: { getService: () => ({ getUrl: () => control.webAppUrl }), getOAuthToken: () => control.oauthToken },
     UrlFetchApp: { fetch },
     Session: { getScriptTimeZone: () => 'Asia/Tokyo', getActiveUser: () => ({ getEmail: () => '' }), getEffectiveUser: () => ({ getEmail: () => 'mock@example.invalid' }) },
     console: Object.fromEntries(['log', 'warn', 'error', 'info'].map(level => [level, (...args) => logs.push({ level, text: args.map(String).join(' ') })]))

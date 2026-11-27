@@ -15,16 +15,17 @@
     return /[,"\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
   }
   function toCsv(posts, photosByPost) {
-    var rows = [['受付番号', '何枚目', '受付日時', '撮影日時', '区分', '至急', '状況', '緯度', '経度', '位置の精度(m)', '位置の取り方', 'コメント', '投稿者', '所属', '対応メモ', '非表示', '写真ID', 'Googleマップ']];
+    var rows = [['受付番号', '何枚目', '受付日時', '撮影日時', '区分', '至急', '状況', '緯度', '経度', '位置の精度(m)', '位置の取り方', 'コメント', '投稿者', '所属', '対応メモ', '非表示', '写真ID', 'Googleマップ', '種類', '長さ(秒)']];
     posts.forEach(function (p) { photos(p, photosByPost).forEach(function (photo, index) {
       var r = Object.assign({}, p, photo);
-      rows.push([r.no, r.n || index + 1, r.at, r.shot, r.cat, r.urgent ? '至急' : '', r.status, r.lat, r.lng, r.acc, sources[r.src] || r.src, r.note, r.who, r.org, r.memo, r.hidden ? '非表示' : '', r.id, googleMapsUrl(r.lat, r.lng)]);
+      rows.push([r.no, r.n || index + 1, r.at, r.shot, r.cat, r.urgent ? '至急' : '', r.status, r.lat, r.lng, r.acc, sources[r.src] || r.src, r.note, r.who, r.org, r.memo, r.hidden ? '非表示' : '', r.id, googleMapsUrl(r.lat, r.lng), r.kind === 'video' ? '動画' : '写真', r.kind === 'video' ? r.duration : '']);
     }); });
     return '\uFEFF' + rows.map(function (row) { return row.map(csvCell).join(','); }).join('\r\n') + '\r\n';
   }
   function properties(p) {
     var list = photos(p), ids = list.map(function (r) { return r.id; }).filter(Boolean);
-    return { '受付番号': p.no, '区分': p.cat, '至急': !!p.urgent, '状況': p.status || '未確認', '受付日時': p.at || '', '投稿者': p.who || '', '所属': p.org || '', 'コメント': p.note || '', '対応メモ': p.memo || '', '写真の数': list.length, '写真ID': ids };
+    return { '受付番号': p.no, '区分': p.cat, '至急': !!p.urgent, '状況': p.status || '未確認', '受付日時': p.at || '', '投稿者': p.who || '', '所属': p.org || '', 'コメント': p.note || '', '対応メモ': p.memo || '', '写真の数': list.length, '写真ID': ids,
+      '種類': list.map(function (r) { return r.kind === 'video' ? '動画' : '写真'; }), '長さ(秒)': list.map(function (r) { return r.kind === 'video' ? text(r.duration) : ''; }) };
   }
   function toGeoJson(posts) {
     return { type: 'FeatureCollection', features: posts.filter(located).map(function (p) { return { type: 'Feature', geometry: { type: 'Point', coordinates: [p.lng, p.lat] }, properties: properties(p) }; }) };

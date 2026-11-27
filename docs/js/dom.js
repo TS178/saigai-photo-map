@@ -20,10 +20,8 @@
   function toast(msg) {
     var node = root.document.getElementById('toast');
     if (!node) { node = el('div', { id: 'toast', role: 'status', 'aria-live': 'polite' }); root.document.body.appendChild(node); }
-    var header = root.document.querySelector('.admin-header, .app-header');
-    node.style.setProperty('--toast-top', Math.max(0, header ? header.getBoundingClientRect().bottom : 0) + 'px');
     node.textContent = msg; node.hidden = false;
-    root.clearTimeout(toast.timer); toast.timer = root.setTimeout(function () { node.hidden = true; }, 4000);
+    root.clearTimeout(toast.timer); toast.timer = root.setTimeout(function () { node.hidden = true; }, 3000);
   }
   function banner(kind, msg, id) {
     id = id || 'banner'; var node = root.document.getElementById(id);

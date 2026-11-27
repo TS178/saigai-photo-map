@@ -1,6 +1,6 @@
 <!doctype html>
 <html lang="ja"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex,nofollow"><meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self'; img-src 'self'; base-uri 'self'; object-src 'none'"><title>01 最初の設定｜災害写真マップ</title><link rel="stylesheet" href="manual.css"></head><body>
-<header><h1>01 最初の設定</h1><p>災害写真マップ 1.0.0 ／ 初めて準備する担当者向け</p><nav><a href="02_災害のときの使い方.html">災害のときの使い方</a><a href="03_実機の確認表.html">実機の確認表</a><a href="04_本番への移し方.html">本番への移し方</a></nav></header>
+<header><h1>01 最初の設定</h1><p>災害写真マップ 1.1.0 ／ 初めて準備する担当者向け</p><nav><a href="02_災害のときの使い方.html">災害のときの使い方</a><a href="03_実機の確認表.html">実機の確認表</a><a href="04_本番への移し方.html">本番への移し方</a></nav></header>
 <p class="note">防災担当の共用Googleアカウントと、公開に使うGitHubアカウントを用意してください。写真はGoogleドライブ、記録はスプレッドシートに保存されます。</p>
 <p>この手引きで「GAS」と呼ぶものは、Googleの「Apps Script」で動く写真受付の仕組みです。「URL」はリンク先のアドレスのことです。</p>
 <h2>1 記録用のスプレッドシートを作る</h2><ol>
@@ -16,7 +16,8 @@
 <li>ファイルの中身をすべてコピーします。</li>
 <li>Apps Scriptの「コード.gs」に貼り付けます。</li>
 <li>「プロジェクトを保存」を押します。</li>
-</ol><p>貼り付けたコードの最後に <code>var SPM_CODE_END = '1.0.0';</code> があることを確認してください。</p>
+</ol><p>貼り付けたコードの最後に <code>var SPM_CODE_END = '1.1.0';</code> があることを確認してください。</p>
+<p class="important">エディタの「実行」ボタンは使いません。スプレッドシートを開き直し、上のメニュー「災害写真マップ」→「①最初の設定」から操作してください。</p>
 <h2>2 最初の設定と許可をする</h2><ol>
 <li>スプレッドシートの画面に戻ります。</li>
 <li>ブラウザの「再読み込み」を押します。</li>
@@ -91,6 +92,8 @@
 <li>GitHubの <code>docs</code> を同じ配布版のファイルに更新します。</li>
 <li>管理画面の「↻ 全部読み直す」を押します。</li>
 </ol><p class="important">この方法ではウェブアプリのURLは変わりません。「新しいデプロイ」を作ると別のURLになります。誤って新しく作ったときは、使うURLと <code>config.js</code> が一致しているか確認してください。</p>
+<h3>1.1.0に上げるとき</h3><p>上の手順で <code>gas/Code.gs</code> の全体を貼り替え、保存した後に「デプロイを管理」→ 鉛筆の「編集」→「新しいバージョン」で公開します。保存だけでは、受付に使うコードは変わりません。URLは変わりません。投稿・管理ページの <code>docs</code> も1.1.0の配布物へ更新してください。新しい <code>docs/js/video.js</code> も含めます。</p>
+<p>初めて動画を送ると許可の画面が出ることがあります。防災担当の共用Googleアカウントで、求められたGoogleドライブなどの権限を確認して許可してください。許可を終えたら、投稿ページの送信待ちから送り直します。</p>
 <h2>7 庁内PCで公開ページが開けない場合</h2><ol>
 <li><code>docs</code> フォルダを丸ごとPCに写します。</li>
 <li>写した <code>config.js</code> の <code>gasUrl</code> に公開したGASのURLを入れます。</li>
@@ -100,4 +103,4 @@
 <li>「設定」の「投稿ページのURL」に、GitHub Pagesで公開した投稿ページのURLを入れます。</li>
 <li>「投稿ページのURLを保存」を押します。</li>
 </ol><p>GASと地図の通信ができるPCで使えます。管理画面のファイルだけを開ける方法です。スマホへの投稿用リンクは、公開されたHTTPSの投稿ページを使います。</p>
-<footer>災害写真マップ 1.0.0 ／ 合言葉・パスワードはこの手引きに書き込まず、町で決めた場所に保管してください。</footer></body></html>
+<footer>災害写真マップ 1.1.0 ／ 合言葉・パスワードはこの手引きに書き込まず、町で決めた場所に保管してください。</footer></body></html>

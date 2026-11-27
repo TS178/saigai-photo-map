@@ -75,7 +75,7 @@
     renderHeader();
     var posts = filtered(), all = groups(), visible = new Set(posts.map(function (p) { return p.pid; }));
     state.selected.forEach(function (pid) { if (!visible.has(pid)) state.selected.delete(pid); });
-    byId('result-count').textContent = '表示 ' + posts.length + ' / ' + all.length + '投稿（写真 ' + posts.reduce(function (n, p) { return n + p.photos.length; }, 0) + '枚）' + (state.selected.size ? '・選択 ' + state.selected.size + '投稿' : '');
+    byId('result-count').textContent = '表示 ' + posts.length + ' / ' + all.length + '投稿（写真・動画 ' + posts.reduce(function (n, p) { return n + p.photos.length; }, 0) + '件）' + (state.selected.size ? '・選択 ' + state.selected.size + '投稿' : '');
     var unread = posts.filter(function (p) { return state.unread.has(state.d + ':' + p.pid); });
     byId('new-notice').hidden = !unread.length; byId('new-notice').textContent = '新着 ' + unread.length + '件';
     S.adminMap.render(posts); S.adminViews.render(posts);
@@ -99,9 +99,9 @@
     ['past-banner', 'connection-banner', 'version-banner', 'complete-banner', 'current-banner'].forEach(function (id) { dom.banner('warning', '', id); });
     byId('login-error').textContent = message || ''; byId('admin-pass').value = ''; byId('admin-pass').focus();
   }
-  async function request(action, payload) {
+  async function request(action, payload, options) {
     var token = state.token, epoch = state.epoch;
-    var reply = await S.api(action, Object.assign({}, payload, { token: token }));
+    var reply = await S.api(action, Object.assign({}, payload, { token: token }), options);
     if (epoch !== state.epoch || token !== state.token) return { ok: false, error: 'stale', message: '操作を終了しました。' };
     if (reply.error === 'auth') logout('もう一度パスワードを入れてください。');
     return reply;

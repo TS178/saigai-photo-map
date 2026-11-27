@@ -14,7 +14,7 @@ const directory = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(directory, '../..'), shots = path.join(directory, 'shots');
 const iphone = 'Mozilla/5.0 (iPhone; CPU iPhone OS 15_7 like Mac OS X) AppleWebKit/605.1.15 Version/15.6 Mobile/15E148 Safari/604.1';
 const attack = '<img src=x onerror=alert(1)>', point = { latitude: 37.0412, longitude: 136.7790, accuracy: 12 };
-let mock, browser, post, admin, originalId, jpeg, serial = 0, passed = 0, failed = 0;
+let mock, browser, post, admin, originalId, jpeg, videoId, serial = 0, passed = 0, failed = 0;
 const requests = [], tiles = [], unexpected = [], interceptionErrors = [], dialogs = [], runtimeErrors = [], temporary = [];
 
 function crc32(data) {
@@ -36,7 +36,7 @@ const q = selector => `document.querySelector(${JSON.stringify(selector)})`;
 const text = (value, scope = 'document') => `Array.from(${scope}.querySelectorAll('button,a')).find(e => e.textContent.trim() === ${JSON.stringify(value)} && !e.closest('[hidden]'))`;
 const has = value => `document.body.textContent.includes(${JSON.stringify(value)})`;
 const dialog = "document.querySelector('[role=dialog]')";
-const activeMap = 'spmTest.maps[spmTest.maps.length - 1]';
+const activeMap = 'spmTest.maps.filter(m=>m.getContainer().isConnected && m.getContainer()._leaflet_id).slice(-1)[0]';
 const activeCluster = 'spmTest.clusters[spmTest.clusters.length - 1]';
 async function click(page, label, scope) { await page.click(text(label, scope)); }
 async function shot(page, name) { await page.screenshot(path.join(shots, name + '.png')); }
@@ -109,6 +109,85 @@ async function sendPhotos(page) {
   await page.click(q('.send-button'));
   await page.wait(has('送信の結果'), { timeout: 60000 });
 }
+async function singleLine(page, screen) {
+  const result = await page.evaluate(`(() => {
+    const nodes = Array.from(document.querySelectorAll('#main button,#main a.button,#main .file-picker,#main h2,#main h3'));
+    return nodes.filter(n => !n.closest('[hidden]') && n.getBoundingClientRect().width && getComputedStyle(n).visibility !== 'hidden').map(node => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT), rects = []; let textNode;
+      while ((textNode = walker.nextNode())) {
+        if (!textNode.textContent.trim()) continue;
+        const range = document.createRange(); range.selectNodeContents(textNode);
+        for (const r of range.getClientRects()) if (r.width && r.height) rects.push({top:r.top,bottom:r.bottom,left:r.left,right:r.right});
+      }
+      // 絵文字と日本語で字の高さが違っても、縦方向に重なる矩形は同じ行。
+      const lines = [];
+      for (const r of rects.sort((a,b)=>a.top-b.top)) {
+        const line = lines.find(l=>Math.min(l.bottom,r.bottom)>Math.max(l.top,r.top));
+        if (line) { line.top=Math.min(line.top,r.top); line.bottom=Math.max(line.bottom,r.bottom); }
+        else lines.push({...r});
+      }
+      const r=node.getBoundingClientRect();
+      return {label:node.textContent.trim(),lines:lines.length,clipped:node.scrollWidth>node.clientWidth+1 || rects.some(t=>t.left<r.left-1 || t.right>r.right+1)};
+    });
+  })()`);
+  assert.ok(result.length, screen + 'のボタンがある');
+  for (const item of result) { assert.ok(item.lines <= 1, screen + '：' + item.label + 'が' + item.lines + '行'); assert.equal(item.clipped, false, screen + '：' + item.label + 'が見切れない'); }
+}
+async function locateCircle(page, scope = 'document') {
+  const sizes = await page.evaluate(`Array.from(${scope}.querySelectorAll('.map-locate')).filter(n=>n.getClientRects().length).map(n=>{const r=n.getBoundingClientRect();return {w:r.width,h:r.height,svg:!!n.querySelector('svg'),label:n.getAttribute('aria-label')};})`);
+  assert.ok(sizes.length);
+  for (const size of sizes) { assert.ok(Math.abs(size.w-size.h)<=1); assert.ok(size.w<=44 && size.h<=44); assert.equal(size.svg,true); assert.equal(size.label,'現在地に移動'); }
+}
+async function postMapControls(page) {
+  await page.evaluate("document.querySelector('.base-row').scrollIntoView({block:'center',behavior:'instant'})");
+  await locateCircle(page);
+  for (const label of ['航空写真', '予備', '標準']) {
+    const target = `Array.from(document.querySelectorAll('.base-row button')).find(n=>n.dataset.label===${JSON.stringify(label)})`;
+    const inside = await page.evaluate(`(() => {const n=${target},r=n.getBoundingClientRect(),m=document.querySelector('#main .map').getBoundingClientRect();return r.left>=0&&r.right<=innerWidth&&r.top>=0&&r.bottom<=innerHeight&&r.bottom<=m.top;})()`);
+    assert.equal(inside, true, label + 'が地図の上で全部見える');
+    await page.click(target); await page.wait(`${target}.getAttribute('aria-pressed')==='true'`);
+    const base = { '標準': 'osm', '航空写真': 'photo', '予備': 'gsiStd' }[label];
+    assert.equal(await page.evaluate("localStorage.getItem('spm-base')"), base);
+    assert.equal(await page.evaluate(`(() => {const map=${activeMap},layers=Object.values(map._layers).filter(l=>l._url).map(l=>l._url);return layers.includes(SPM_CONFIG.tiles[${JSON.stringify(base)}]);})()`), true);
+  }
+}
+async function addVideo(page) {
+  // 録画の完了はevaluateの外から待つ。画面の処理を待つPromiseは返さない。
+  await page.evaluate(`(() => {
+    spmTest.videoFile=null; spmTest.videoError='';
+    const canvas=document.createElement('canvas'); canvas.width=640;canvas.height=360;
+    const ctx=canvas.getContext('2d'),frame=ctx.createImageData(640,360),pixels=new Uint32Array(frame.data.buffer);
+    let seed=12345;
+    const draw=()=>{for(let i=0;i<pixels.length;i++){seed^=seed<<13;seed^=seed>>>17;seed^=seed<<5;pixels[i]=(seed&0xffffff)|0xff000000;}ctx.putImageData(frame,0,0);};
+    draw(); const stream=canvas.captureStream(30),chunks=[];
+    const recorder=new MediaRecorder(stream,{mimeType:'video/webm;codecs=vp8',videoBitsPerSecond:8000000});
+    const timer=setInterval(draw,33);
+    recorder.ondataavailable=e=>{if(e.data.size)chunks.push(e.data);};
+    recorder.onerror=()=>{spmTest.videoError='録画できませんでした';};
+    recorder.onstop=()=>{clearInterval(timer);stream.getTracks().forEach(t=>t.stop());spmTest.videoFile=new File(chunks,'試験の動画.webm',{type:'video/webm',lastModified:Date.now()});};
+    recorder.start(100); setTimeout(()=>recorder.stop(),2100);
+  })(); true`);
+  await page.wait('spmTest.videoFile || spmTest.videoError', { timeout: 15000 });
+  assert.equal(await page.evaluate('spmTest.videoError'), '');
+  assert.ok(await page.evaluate('spmTest.videoFile.size > 256*1024'), '2つ以上の塊になる動画');
+  const before = (await db(page, 'draft')).length;
+  await page.evaluate(`(() => {
+    const label=Array.from(document.querySelectorAll('.file-picker')).find(n=>n.textContent.includes('🎥 動画'));
+    const input=label.querySelector('input'),transfer=new DataTransfer(); transfer.items.add(spmTest.videoFile);input.files=transfer.files;input.dispatchEvent(new Event('change',{bubbles:true}));
+  })()`);
+  await until(async () => (await db(page, 'draft')).length === before+1, {timeout:30000,label:'動画の下書き'});
+}
+async function detailMap(page, chosen) {
+  await page.wait(`!!${q('.detail-map .leaflet-interactive')}`);
+  const info=await page.evaluate(`(() => {
+    const map=spmTest.maps.find(m=>m.getContainer()===document.querySelector('.detail-map'));
+    spmTest.detailMap=map; spmTest.detailRemoved=false; map.once('unload',()=>{spmTest.detailRemoved=true;});
+    const marker=Object.values(map._layers).find(m=>m instanceof L.CircleMarker);
+    const point=marker.getLatLng(); return {height:map.getContainer().getBoundingClientRect().height,zoom:map.getZoom(),lat:point.lat,lng:point.lng,color:marker.options.color};
+  })()`);
+  assert.equal(info.height,220); assert.equal(info.zoom,17); assert.equal(info.lat,chosen.lat); assert.equal(info.lng,chosen.lng);
+  assert.equal(info.color,await page.evaluate(`SPM.adminMap.color(${JSON.stringify(chosen.cat)})`));
+}
 async function closeDialog(page) { if (await page.evaluate(`!!${dialog}`)) await click(page, '閉じる', dialog); }
 async function confirmAdmin(page) { await click(page, '実行する', dialog); }
 async function groups(page = admin) { return page.evaluate('SPM.admin.filtered().map(p => ({...p, photos:p.photos.map(r => ({...r}))}))'); }
@@ -140,7 +219,18 @@ async function setupPage(page) {
   });
   await page.cdp.send('Fetch.enable', { patterns: [{ urlPattern: '*', requestStage: 'Request' }] });
   await page.cdp.send('Page.addScriptToEvaluateOnNewDocument', { source: `
-    window.spmTest = {maps:[],clusters:[]};
+    window.spmTest = {maps:[],clusters:[],fetches:[]};
+    const originalFetch = window.fetch;
+    window.fetch = function(input, init) {
+      // ページからの呼び出しだけを数える。通信層の自動再送は含めず、本文も変えない。
+      if (typeof init?.body === 'string') {
+        try {
+          const body = JSON.parse(init.body);
+          if (body && typeof body.a === 'string') spmTest.fetches.push({a:body.a,id:body.id,start:body.start});
+        } catch { /* JSONでないfetchは記録しない。 */ }
+      }
+      return originalFetch.apply(this, arguments);
+    };
     document.addEventListener('DOMContentLoaded', () => {
       if (!window.L) return;
       const map = L.map, cluster = L.markerClusterGroup;
@@ -148,9 +238,15 @@ async function setupPage(page) {
       if (cluster) L.markerClusterGroup = function(options) { const value = cluster.call(this,{...options,animate:false}); spmTest.clusters.push(value); return value; };
     }, {once:true});` });
 }
+async function network(page, offline) {
+  await page.cdp.send('Network.enable');
+  await page.cdp.send('Network.emulateNetworkConditions', { offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+  await page.wait(`navigator.onLine === ${!offline}`);
+  assert.equal(await page.evaluate('navigator.onLine'), !offline, offline ? '圏外になった' : '圏内に戻った');
+}
 async function mobile(page, ua = iphone) {
   await page.bringToFront();
-  await page.cdp.send('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await page.cdp.send('Emulation.setDeviceMetricsOverride', { width: 360, height: 844, deviceScaleFactor: 1, mobile: true });
   await page.cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true });
   await page.cdp.send('Emulation.setUserAgentOverride', { userAgent: ua });
   await page.cdp.send('Emulation.setGeolocationOverride', point);
@@ -172,7 +268,7 @@ async function directUpload(overrides = {}) {
 
 try {
   await fs.mkdir(shots, { recursive: true });
-  mock = await startMock();
+  mock = await startMock({ videoChunkBytes: 256 * 1024 });
   assert.equal((await run('setup_')).ok, true);
   const started = await run('startDisaster_', '災害', '試験の大雨', 'メニュー'); assert.equal(started.ok, true); originalId = started.id;
   await run('setMapHome_', point.latitude, point.longitude, 16, 'メニュー');
@@ -188,29 +284,29 @@ try {
     await post.fill(q('#who'), '試験担当'); await post.fill(q('#org'), '消防団'); await click(post, '始める');
     await post.wait(has('いまいる場所で送る')); await shot(post, 'post-home');
     jpeg = await post.evaluate(`(() => { const canvas=document.createElement('canvas'); canvas.width=640;canvas.height=480; const ctx=canvas.getContext('2d');ctx.fillStyle='#27648a';ctx.fillRect(0,0,640,480);ctx.fillStyle='white';ctx.font='32px sans-serif';ctx.fillText('試験の写真',50,100);return canvas.toDataURL('image/jpeg',.8).split(',')[1]; })()`);
-    await readability(post, true);
+    await readability(post, true); await singleLine(post, 'ホーム');
   });
   await check('投稿2 現地で2枚・GPS・至急・入力を文字で保存', async () => {
     await post.bringToFront();
     const before = rows(await state()).length;
-    await click(post, '📷 いまいる場所で送る（現地）'); await post.wait(has('精度 ±12m')); await addPhotos(post, 2);
+    await click(post, '📷 いまいる場所で送る'); await post.wait(has('精度 ±12m')); await addPhotos(post, 2);
     await post.click(q('[data-cat="冠水・浸水"]')); await post.click(q('.urgent-label input')); await post.fill(q('textarea'), attack);
-    await shot(post, 'post-field'); await readability(post, true); await sendPhotos(post); await rowCount(before + 2); await shot(post, 'post-result');
+    await shot(post, 'post-field'); await readability(post, true); await singleLine(post, '現地'); await postMapControls(post); await sendPhotos(post); await rowCount(before + 2); await shot(post, 'post-result');
     const saved = rows(await state()).slice(-2); assert.equal(saved[0]['受付番号'], saved[1]['受付番号']);
     for (const row of saved) { assert.equal(row['位置の取り方'], '現在地(GPS)'); assert.ok(Math.abs(row['緯度'] - point.latitude) < .00001); assert.ok(Math.abs(row['経度'] - point.longitude) < .00001); assert.equal(row['至急'], true); assert.equal(row['コメント'], attack); }
   });
   await check('投稿3 まとめて・EXIF・座標・短いリンク・地図・同じ場所', async () => {
     await post.bringToFront();
-    await home(post); await click(post, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(post, 3, { exif: true });
+    await home(post); await click(post, '🗂 あとで場所を決めて送る'); await addPhotos(post, 3, { exif: true });
     const drafts = await db(post, 'draft'); assert.equal(drafts[0].src, 'exif'); assert.ok(Math.abs(drafts[0].lat - point.latitude) < .00001);
-    await shot(post, 'post-batch');
+    await shot(post, 'post-batch'); await singleLine(post, 'まとめて');
     await click(post, '場所を決める', "document.querySelectorAll('.photo-card')[1]"); await post.wait(`!!${q('#location-text')}`);
     await post.fill(q('#location-text'), '37.0412, 136.7790'); await click(post, '読み取る');
     await post.wait("Array.from(document.querySelectorAll('#main p[role=status]')).some(e=>e.textContent==='Googleマップ：37.041200, 136.779000')");
     await post.fill(q('#location-text'), 'https://maps.app.goo.gl/spm-test'); await click(post, '読み取る');
     await post.wait(`${text('読み取る')}?.disabled === false`); await until(async () => (await state()).counters.fetches > 0, { label: '短いリンクの偽通信' });
     await post.wait("Array.from(document.querySelectorAll('#main p[role=status]')).some(e=>e.textContent==='Googleマップ：37.041200, 136.779000')");
-    await mapTap(post); await shot(post, 'post-place'); await click(post, 'この場所に決める');
+    await mapTap(post); await singleLine(post, '場所を決める'); await postMapControls(post); await shot(post, 'post-place'); await click(post, 'この場所に決める');
     await post.wait(`document.querySelectorAll('.photo-card').length === 3`);
     await click(post, '前の写真と同じ場所', "document.querySelectorAll('.photo-card')[2]");
     await until(async () => { const d = await db(post, 'draft'); return d[1].src === 'map' && d[2].lat === d[1].lat && d[2].lng === d[1].lng; });
@@ -221,15 +317,15 @@ try {
   });
   await check('投稿4 圏外の送信待ちと返事を失った写真の二重登録防止', async () => {
     await post.bringToFront();
-    await home(post); await click(post, '📷 いまいる場所で送る（現地）'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1);
+    await home(post); await click(post, '📷 いまいる場所で送る'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1);
     const before = rows(await state()).length;
-    await post.cdp.send('Network.emulateNetworkConditions', { offline: true, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    await network(post, true);
     await sendPhotos(post); await post.wait(`${q('#pending-banner')}.textContent.includes('1件') && !${q('#pending-banner')}.hidden`);
-    assert.match(await post.evaluate(`${q('#pending-banner')}.className`), /warning/); await click(post, '送信待ちを見る'); await post.wait(`!!${q('.queue-row')}`); await shot(post, 'post-queue'); assert.equal((await db(post, 'outbox')).length, 1);
-    await post.cdp.send('Network.emulateNetworkConditions', { offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
+    assert.match(await post.evaluate(`${q('#pending-banner')}.className`), /warning/); await click(post, '送信待ちを見る'); await post.wait(`!!${q('.queue-row')}`); await shot(post, 'post-queue'); await singleLine(post, '送信待ち'); assert.equal((await db(post, 'outbox')).length, 1);
+    await network(post, false);
     await post.evaluate("window.dispatchEvent(new Event('online'))"); await rowCount(before + 1);
     await until(async () => (await db(post, 'outbox')).length === 0, { timeout: 45000 });
-    await home(post); await click(post, '📷 いまいる場所で送る（現地）'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1);
+    await home(post); await click(post, '📷 いまいる場所で送る'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1);
     const id = (await db(post, 'draft'))[0].id;
     await json('/test/flags', { dropNextUploadResponse: true }); await sendPhotos(post); await rowCount(before + 2);
     assert.equal(rows(await state()).filter(row => row['写真ID'] === id).length, 1);
@@ -254,21 +350,56 @@ try {
   });
   await check('投稿8 写真2枚の下書きを読み直して復元', async () => {
     await post.bringToFront();
-    await home(post); await click(post, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(post, 2);
+    await home(post); await click(post, '🗂 あとで場所を決めて送る'); await addPhotos(post, 2);
     const ids = (await db(post, 'draft')).map(row => row.id).sort(); await home(post); await post.wait(has('前の続きがあります'));
     await click(post, '📝 前の続きがあります（2枚）'); await post.wait(`document.querySelectorAll('.photo-card').length === 2`); assert.deepEqual((await db(post, 'draft')).map(row => row.id).sort(), ids);
     for (let i = 0; i < 2; i++) { await click(post, '✕ この写真を外す'); await until(async () => (await db(post, 'draft')).length === 1 - i); }
   });
   await check('投稿9 場所が分からない写真を位置なしで送信', async () => {
     await post.bringToFront();
-    await home(post); await click(post, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(post, 1); await click(post, '場所が分からない（本部であとで置く）');
+    await home(post); await click(post, '🗂 あとで場所を決めて送る'); await addPhotos(post, 1); await click(post, '場所が分からない');
     await until(async () => (await db(post, 'draft'))[0].src === 'none'); const before = rows(await state()).length; await sendPhotos(post); await rowCount(before + 1);
     const saved = rows(await state()).at(-1); assert.equal(saved['緯度'], ''); assert.equal(saved['経度'], ''); assert.equal(saved['位置の取り方'], '位置なし');
   });
   await check('投稿10 読めないHEICを下書きに入れない', async () => {
     await post.bringToFront();
-    await home(post); await click(post, '🗂 あとから場所を決めて送る（まとめて）'); const before = (await db(post, 'draft')).length; await addPhotos(post, 1, { heic: true });
+    await home(post); await click(post, '🗂 あとで場所を決めて送る'); const before = (await db(post, 'draft')).length; await addPhotos(post, 1, { heic: true });
     await post.wait(has('この写真の形式は送れません')); assert.equal((await db(post, 'draft')).length, before);
+  });
+
+  await check('動画 360pxのカード・分割中の圏外・続きから送って1件だけ記録', async () => {
+    await post.bringToFront();
+    const before = rows(await state()).length;
+    try {
+      await home(post); await click(post, '🗂 あとで場所を決めて送る'); await addVideo(post);
+      const record = (await db(post, 'draft')).find(r=>r.kind==='video'); assert.ok(record); videoId=record.id;
+      assert.equal(record.mime, 'video/webm'); assert.ok(await post.evaluate(`SPM.outbox.all('draft').then(rows=>rows.find(r=>r.id===${JSON.stringify(videoId)}).img.byteLength>256*1024)`));
+      await click(post, '場所を決める'); await post.wait(`!!${q('.place-map')}`); await mapTap(post); await click(post, 'この場所に決める');
+      await post.wait(`!!${q('.photo-card .video-label')}`); await singleLine(post, '動画のカード'); await shot(post, 'post-video-card');
+      await json('/test/flags', { pauseAfterVideoChunk: true, failAfterVideoChunk: true });
+      await post.click(q('.send-button'));
+      await post.wait(`${q('#video-send-progress')}?.textContent.includes('動画 ')`);
+      await until(async () => (await state()).metrics.videoChunks.some(r=>r.id===videoId && r.next===256*1024), {timeout:30000,label:'最初の塊の保存'});
+      await shot(post, 'post-video-progress');
+      await network(post, true); await json('/test/flags', { pauseAfterVideoChunk: false });
+      await post.wait(has('送信の結果'), {timeout:30000});
+      await post.wait(`${q('#pending-banner')}.textContent.includes('1件')`);
+      assert.equal((await db(post, 'outbox')).filter(r=>r.id===videoId).length,1);
+      assert.equal(rows(await state()).length,before,'途中の動画は記録しない');
+      await click(post, '送信待ちを見る'); await post.wait(`!!${q('.queue-row .video-label')}`); await singleLine(post, '動画の送信待ち');
+      await network(post, false); await post.evaluate("window.dispatchEvent(new Event('online'))");
+      await rowCount(before+1); await until(async () => !(await db(post,'outbox')).some(r=>r.id===videoId), {timeout:60000,label:'動画の送信完了'});
+      const snapshot=await state(), saved=rows(snapshot).filter(r=>r['写真ID']===videoId);
+      assert.equal(saved.length,1); assert.equal(saved[0]['種類'],'動画');
+      assert.ok(snapshot.metrics.videoStarts.some(r=>r.id===videoId && r.next===256*1024),'サーバーが続きの位置を返す');
+      const fetches = await post.evaluate('spmTest.fetches');
+      assert.equal(fetches.filter(r=>r.a==='videoChunk' && r.id===videoId && r.start===0).length,1,'ページが最初の塊を送り直さない');
+      assert.equal(snapshot.metrics.failedVideoChunks,1,'保存後の503は1回だけ');
+      assert.equal(snapshot.metrics.videoChunks.filter(r=>r.id===videoId && r.done).length,1);
+      const source=await post.evaluate('spmTest.videoFile.arrayBuffer().then(b=>Array.from(new Uint8Array(b)))');
+      const file=snapshot.drive.files.find(f=>f.id===saved[0]['写真ファイルID']);
+      assert.ok(file); assert.equal(file.mime,'video/webm'); assert.deepEqual(Buffer.from(file.b64,'base64'),Buffer.from(source),'動画本体を変えずに保存する');
+    } finally { await json('/test/flags', {pauseAfterVideoChunk:false,failAfterVideoChunk:false}); await network(post, false); }
   });
 
   admin = await browser.newPage('about:blank'); await admin.viewport(1366, 900); await admin.bringToFront();
@@ -277,7 +408,7 @@ try {
     await admin.navigate(mock.siteUrl + '/admin.html?api=' + encodeURIComponent(mock.gasUrl) + '&poll=2');
     await admin.fill(q('#admin-pass'), randomUUID()); await click(admin, 'ログイン'); await admin.wait(has('パスワードが違います'));
     const expectedPhotos = rows(await state()).length;
-    await admin.fill(q('#admin-pass'), (await credentials()).pass); await click(admin, 'ログイン'); await admin.wait(`${q('#result-count')}.textContent.includes(${JSON.stringify('写真 ')} + ${expectedPhotos} + '枚')`);
+    await admin.fill(q('#admin-pass'), (await credentials()).pass); await click(admin, 'ログイン'); await admin.wait(`${q('#result-count')}.textContent.includes(${JSON.stringify('写真・動画 ')} + ${expectedPhotos} + '件')`);
     const ps = await groups(), located = ps.filter(p => p.lat !== '' && p.lat !== null); assert.equal(await admin.evaluate(`${activeCluster}.getLayers().length`), located.length);
     await admin.evaluate(`void ${activeMap}.setView([37.0412,136.779],19,{animate:false})`);
     await admin.wait("document.querySelector('.is-urgent .urgent-label,.bundle-urgent')?.textContent.includes('至急')"); await shot(admin, 'admin-map');
@@ -288,10 +419,29 @@ try {
     const before = (await groups()).length; await directUpload(); await admin.wait(`SPM.admin.groups().length === ${before + 1} && !${q('#new-notice')}.hidden`, { timeout: 15000 });
     assert.match(await admin.evaluate(`${q('#new-notice')}.textContent`), /新着/);
   });
+  await check('管理 動画の再生・詳細の地図と印・閉じたときの解放', async () => {
+    await admin.bringToFront();
+    assert.ok(videoId);
+    const chosen=(await groups()).find(p=>p.photos.some(r=>r.id===videoId)); assert.ok(chosen);
+    await locateCircle(admin, q('#admin-map'));
+    await admin.evaluate(`SPM.adminViews.detail(${JSON.stringify(chosen.pid)},${JSON.stringify(videoId)})`);
+    await admin.wait(`${q('.detail-video')}?.readyState>=1 && ${q('.detail-video')}.duration>0`, {timeout:60000});
+    assert.equal(await admin.evaluate(`${q('.detail-video')}.controls && ${q('.detail-video')}.hasAttribute('playsinline')`),true);
+    assert.equal(await admin.evaluate(`${text('Googleドライブで開く',dialog)}?.href.includes('drive.google.com/file/d/')`),true);
+    await detailMap(admin,chosen); await shot(admin,'admin-detail-video'); await closeDialog(admin);
+    assert.equal(await admin.evaluate('spmTest.detailRemoved'),true);
+    assert.equal(await admin.evaluate(`!!${q('.detail-map')}`),false);
+    const chosenPhoto=(await groups()).find(p=>p.photos[0].kind!=='video' && typeof p.lat==='number'); assert.ok(chosenPhoto);
+    await admin.evaluate(`SPM.adminViews.detail(${JSON.stringify(chosenPhoto.pid)})`);
+    await admin.wait(`${q('.detail-photo')}?.naturalWidth>0`); await detailMap(admin,chosenPhoto); await shot(admin,'admin-detail-photo-map'); await closeDialog(admin);
+    assert.equal(await admin.evaluate('spmTest.detailRemoved'),true);
+    assert.equal(await admin.evaluate(`!!${q('.detail-map')}`),false);
+  });
   await check('管理3 タイル・一覧の件数と区分の絞り込み', async () => {
     await admin.bringToFront();
     const ps = await groups(); await click(admin, 'タイル'); assert.equal(await admin.evaluate("document.querySelectorAll('#tiles-view .tile').length"), ps.reduce((n, p) => n + p.photos.length, 0)); await shot(admin, 'admin-tiles');
     await click(admin, '一覧'); assert.equal(await admin.evaluate("document.querySelectorAll('#list-view tbody tr').length"), ps.length); await shot(admin, 'admin-list');
+    assert.equal(await admin.evaluate(`Array.from(document.querySelectorAll('#list-view td:nth-child(4) .badge')).every(n=>{const range=document.createRange();range.selectNodeContents(n);return new Set(Array.from(range.getClientRects(),r=>Math.round(r.top))).size<=1;})`),true,'区分の札が1行');
     await click(admin, '絞り込み'); await admin.click("Array.from(document.querySelectorAll('fieldset label')).find(e=>e.textContent==='冠水・浸水').querySelector('input')"); await click(admin, 'この条件で表示する');
     const filtered = await groups(); assert.ok(filtered.length > 0 && filtered.length < ps.length); assert.ok(filtered.every(p => p.cat === '冠水・浸水'));
     await click(admin, '絞り込み'); await click(admin, '条件をすべて解除'); await click(admin, 'この条件で表示する');
@@ -344,7 +494,7 @@ try {
     await post.wait(`${has('いまいる場所で送る')} && !${q('#code')} && ${q('#disaster-name')}.textContent === '試験の訓練（訓練）' && location.hash === ''`);
     assert.equal(await post.evaluate('performance.timeOrigin'), documentTime, '読み直さずに新しいリンクでホームと災害名を更新する');
     assert.equal(await post.evaluate("JSON.parse(localStorage.getItem('spm-code'))"), nextCode);
-    await click(post, '📷 いまいる場所で送る（現地）'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1); await sendPhotos(post); await rowCount(1, trainingId);
+    await click(post, '📷 いまいる場所で送る'); await post.wait(has('精度 ±12m')); await addPhotos(post, 1); await sendPhotos(post); await rowCount(1, trainingId);
     assert.equal(rows(await state()).length, oldCount); assert.equal((await groups()).length, new Set(rows(await state()).map(r => r['まとまりID'])).size);
     await admin.bringToFront();
   });
@@ -359,9 +509,20 @@ try {
     assert.ok(geo.features.every(f => f.geometry.type === 'Point' && f.geometry.coordinates.length === 2));
     assert.deepEqual(geo.features.map(f => f.geometry.coordinates), located.map(p => [p.lng, p.lat]));
     const kml = (await download(admin, 'KML（Googleマイマップ・Google Earth用）', '.kml')).toString('utf8'); assert.equal((kml.match(/<Placemark>/g) || []).length, located.length); assert.ok(kml.includes('&lt;img')); assert.ok(!kml.includes(attack));
-    const zip = readZip(await download(admin, '写真をまとめて保存（ZIP）', '.zip')); assert.equal(zip.size, photos + 1); assert.ok(zip.has('一覧.csv')); verifyCsv(zip.get('一覧.csv'), photos);
+    const parsed = parseCsv(csvText); assert.deepEqual(parsed[0].slice(-2), ['種類','長さ(秒)']);
+    assert.ok(parsed.slice(1).some(r=>r[16]===videoId && r[18]==='動画'));
+    assert.ok(geo.features.some(f=>f.properties['種類'].includes('動画'))); assert.ok(geo.features.every(f=>Array.isArray(f.properties['長さ(秒)'])));
+    assert.ok(kml.includes('<Data name="種類">') && kml.includes('<Data name="長さ(秒)">'));
+    const photoCount=ps.reduce((n,p)=>n+p.photos.filter(r=>r.kind!=='video').length,0);
+    assert.equal(await admin.evaluate(`${dialog}.querySelector('input[type=checkbox]').checked`),false,'動画を含める初期値はオフ');
+    const zip = readZip(await download(admin, '写真をまとめて保存（ZIP）', '.zip')); assert.equal(zip.size, photoCount + 1); assert.ok(zip.has('一覧.csv')); verifyCsv(zip.get('一覧.csv'), photos);
     for (const [name, bytes] of zip) if (name !== '一覧.csv') { assert.match(name, /^写真\/No\d+-\d+_.+\.jpg$/); assert.equal(bytes.readUInt16BE(0), 0xffd8); }
     await closeDialog(admin);
+    await click(admin,'出力'); await admin.click(`${dialog}.querySelector('input[type=checkbox]')`);
+    const withVideos=readZip(await download(admin,'写真をまとめて保存（ZIP）','.zip')); assert.equal(withVideos.size,photos+1);
+    const entry=Array.from(withVideos).find(([name])=>name.startsWith('動画/')); assert.ok(entry); assert.match(entry[0],/\.webm$/);
+    const snapshot=await state(), saved=rows(snapshot).find(r=>r['写真ID']===videoId), file=snapshot.drive.files.find(f=>f.id===saved['写真ファイルID']);
+    assert.deepEqual(entry[1],Buffer.from(file.b64,'base64')); await closeDialog(admin);
   });
   await check('管理7 印刷用一覧・GoogleマップQR・PDF', async () => {
     await admin.bringToFront();
@@ -371,6 +532,7 @@ try {
     assert.equal(await admin.evaluate("document.querySelectorAll('.print-post').length"), ps.length);
     assert.equal(await admin.evaluate("document.querySelectorAll('.print-post canvas').length"), ps.filter(p => typeof p.lat === 'number').length);
     assert.equal(await admin.evaluate("Array.from(document.querySelectorAll('.print-post img')).every(i=>i.complete&&i.naturalWidth>0)"), true);
+    assert.ok(await admin.evaluate("Array.from(document.querySelectorAll('.print-video figcaption')).some(n=>n.textContent.startsWith('▶ 動画'))"));
     await shot(admin, 'admin-print');
     const { data } = await admin.cdp.send('Page.printToPDF', { printBackground: true, preferCSSPageSize: true });
     const pdf = Buffer.from(data, 'base64'); assert.equal(pdf.subarray(0, 5).toString(), '%PDF-'); assert.ok((pdf.toString('latin1').match(/\/Type\s*\/Page\b/g) || []).length >= 1);
@@ -464,7 +626,9 @@ try {
   });
   await check('管理9 航空写真は拡大14以上でだけ要求', async () => {
     await admin.bringToFront();
-    const before = tiles.length; await admin.evaluate(`void ${activeMap}.setZoom(13,{animate:false})`); await click(admin, '🗺️ 地図の種類'); await admin.click(q('[data-label="航空写真"]'));
+    const before = tiles.length; await admin.evaluate(`void ${activeMap}.setZoom(13,{animate:false})`); await click(admin, '🗺️ 地図の種類');
+    assert.equal(await admin.evaluate(`(() => {const r=document.querySelector('#admin-map .base-panel').getBoundingClientRect(),m=document.querySelector('#admin-map').getBoundingClientRect();return r.left>=m.left&&r.right<=m.right&&r.top>=m.top&&r.bottom<=m.bottom;})()`),true,'地図の種類の一覧が見切れない');
+    await admin.click(q('[data-label="航空写真"]'));
     await admin.wait(`${q('.photo-notice')}.hidden === false`); assert.equal(tiles.slice(before).filter(url => url.includes('/seamlessphoto/')).length, 0);
     await admin.evaluate(`void ${activeMap}.setZoom(15,{animate:false})`); await until(() => tiles.slice(before).some(url => url.includes('cyberjapandata.gsi.go.jp/xyz/seamlessphoto/15/')), { label: '横取りした航空写真タイル' });
     assert.equal(await admin.evaluate(`${q('.photo-notice')}.hidden`), true);
@@ -473,7 +637,7 @@ try {
     await admin.bringToFront();
     const folder = await makeTemp('file'), copy = path.join(folder, 'docs');
     await fs.cp(path.join(root, 'docs'), copy, { recursive: true });
-    const configFile = path.join(copy, 'config.js'); await fs.writeFile(configFile, (await fs.readFile(configFile, 'utf8')).replace(/gasUrl:\s*''/, 'gasUrl: ' + JSON.stringify(mock.gasUrl)), 'utf8');
+    const configFile = path.join(copy, 'config.js'); await fs.writeFile(configFile, (await fs.readFile(configFile, 'utf8')).replace(/gasUrl:\s*'[^']*'/, 'gasUrl: ' + JSON.stringify(mock.gasUrl)), 'utf8');
     const htmlFile = path.join(copy, 'admin.html'); await fs.writeFile(htmlFile, (await fs.readFile(htmlFile, 'utf8')).replace("connect-src 'self'", "connect-src 'self' " + new URL(mock.gasUrl).origin), 'utf8');
     const page = await browser.newPage('about:blank', { isolated: true });
     try {
@@ -505,7 +669,6 @@ try {
     await post.bringToFront();
     // 受付中の災害を戻せないため、管理1〜10と追加stateの後で行う。
     const page = await browser.newPage('about:blank', { isolated: true });
-    const network = offline => page.cdp.send('Network.emulateNetworkConditions', { offline, latency: 0, downloadThroughput: -1, uploadThroughput: -1 });
     async function openCurrent() {
       const latest = (await credentials()).code;
       // 起動時の復元を検査するため、毎回クエリーも変えて本当に読み直す。
@@ -519,7 +682,7 @@ try {
       await mobile(page);
       const nameA = '試験A ' + attack, nameB = '試験Bの受付', nameC = '試験Cの受付';
       const a = await run('startDisaster_', '訓練', nameA, 'メニュー'); assert.equal(a.ok, true);
-      await openCurrent(); await click(page, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(page, 1, { exif: true });
+      await openCurrent(); await click(page, '🗂 あとで場所を決めて送る'); await addPhotos(page, 1, { exif: true });
       const draftA = (await db(page, 'draft'))[0]; assert.equal(draftA.disasterId, a.id); assert.equal(draftA.disasterName, nameA);
 
       const b = await run('startDisaster_', '訓練', nameB, 'メニュー'); assert.equal(b.ok, true); await openCurrent();
@@ -528,20 +691,20 @@ try {
       assert.equal(await page.evaluate(`${q('.previous-drafts p')}.textContent`), '前の受付（' + nameA + '）で作りかけの写真が 1 枚あります');
       assert.equal(await page.evaluate(`!!${text('📝 前の続きがあります（1枚）')}`), false);
       assert.equal(await page.evaluate('!!document.querySelector("img[src=x]")'), false, '災害名は文字として表示する');
-      await click(page, '🗂 あとから場所を決めて送る（まとめて）'); assert.equal(await page.evaluate("document.querySelectorAll('.photo-card').length"), 0);
+      await click(page, '🗂 あとで場所を決めて送る'); assert.equal(await page.evaluate("document.querySelectorAll('.photo-card').length"), 0);
       await home(page); await click(page, '今の受付で使う', q('.previous-drafts')); await page.wait(`document.querySelectorAll('.photo-card').length === 1`);
       const adopted = (await db(page, 'draft'))[0]; assert.equal(adopted.id, draftA.id); assert.equal(adopted.disasterId, b.id); assert.equal(adopted.disasterName, nameB); assert.equal(adopted.mode, 'batch');
       await sendPhotos(page); await rowCount(1, b.id); assert.equal(rows(await state(), a.id).length, 0); assert.equal(rows(await state(), b.id)[0]['写真ID'], draftA.id);
 
-      await home(page); await click(page, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(page, 1, { exif: true });
+      await home(page); await click(page, '🗂 あとで場所を決めて送る'); await addPhotos(page, 1, { exif: true });
       const queuedId = (await db(page, 'draft'))[0].id;
-      await network(true); await sendPhotos(page);
+      await network(page, true); await sendPhotos(page);
       const waitingB = (await db(page, 'outbox'))[0]; assert.equal(waitingB.id, queuedId); assert.equal(waitingB.disasterName, nameB);
       // 名前を持たない旧形式の下書きも、別枠の知らせと削除を選べる。
-      await click(page, 'ホームに戻る'); await click(page, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(page, 1, { exif: true });
+      await click(page, 'ホームに戻る'); await click(page, '🗂 あとで場所を決めて送る'); await addPhotos(page, 1, { exif: true });
       await page.evaluate("SPM.outbox.all('draft').then(async records => { for (const record of records) { delete record.disasterName; await SPM.outbox.saveDraft(record); } })");
       const c = await run('startDisaster_', '訓練', nameC, 'メニュー'); assert.equal(c.ok, true);
-      await network(false); await openCurrent();
+      await network(page, false); await openCurrent();
       await page.wait(`${q('#pending-banner')}.textContent.includes('（前の受付の分 1件）')`);
       assert.equal(await page.evaluate(`${q('.previous-drafts p')}.textContent`), '前の受付で作りかけの写真が 1 枚あります');
       await click(page, '⏳ 送信待ち 1件'); await page.wait(`!!${q('.previous-outbox')}`);
@@ -560,10 +723,10 @@ try {
       await home(page); await click(page, '消す', q('.previous-drafts')); await until(async () => (await db(page, 'draft')).length === 0);
       assert.equal(await page.evaluate(`!!${q('.previous-drafts')}`), false);
       // 送信待ちの「消す」も、次の受付に自動送信せず写真を取り除く。
-      await click(page, '🗂 あとから場所を決めて送る（まとめて）'); await addPhotos(page, 1, { exif: true });
-      await network(true); await sendPhotos(page);
+      await click(page, '🗂 あとで場所を決めて送る'); await addPhotos(page, 1, { exif: true });
+      await network(page, true); await sendPhotos(page);
       const d = await run('startDisaster_', '訓練', '試験Dの受付', 'メニュー'); assert.equal(d.ok, true);
-      await network(false); await openCurrent(); await click(page, '⏳ 送信待ち 1件'); await page.wait(`!!${q('.previous-outbox')}`);
+      await network(page, false); await openCurrent(); await click(page, '⏳ 送信待ち 1件'); await page.wait(`!!${q('.previous-outbox')}`);
       await click(page, '消す', q('.previous-outbox')); await until(async () => (await db(page, 'outbox')).length === 0); await page.wait(has('送信待ちはありません。'));
       assert.equal(rows(await state(), d.id).length, 0); assert.equal(rows(await state(), c.id).length, 1);
       assert.equal(await page.evaluate(`${q('#pending-banner')}.hidden`), true);
@@ -621,7 +784,7 @@ function parseCsv(source) {
 function verifyCsv(data, photos) {
   assert.equal(data.subarray(0, 3).toString('hex'), 'efbbbf'); const source = data.toString('utf8');
   assert.ok(source.endsWith('\r\n')); const parsed = parseCsv(source); assert.equal(parsed.length, photos + 1); assert.equal(parsed[0][0], '受付番号');
-  for (const row of parsed) { assert.equal(row.length, 18); for (const cell of row) assert.doesNotMatch(cell, /^[=+\-@\t\r]/); }
+  for (const row of parsed) { assert.equal(row.length, 20); for (const cell of row) assert.doesNotMatch(cell, /^[=+\-@\t\r]/); }
 }
 function readZip(data) {
   const end = data.length - 22; assert.equal(data.readUInt32LE(end), 0x06054b50);
@@ -647,14 +810,14 @@ async function readability(page, smartphone) {
       if(!visible(node)||node.disabled||node.matches('input[type=checkbox],input[type=file]')||!node.textContent.trim()&&!node.matches('input,textarea,select'))continue;
       const bg=background(node),fg=blend(rgb(getComputedStyle(node).color),bg),a=light(bg),b=light(fg);ratios.push({label:node.textContent.trim().slice(0,45)||node.tagName,ratio:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)});
     }
-    const buttons=Array.from(document.querySelectorAll('button,a.button,.file-picker')).filter(visible).map(n=>({label:n.textContent.trim().slice(0,40),height:n.getBoundingClientRect().height}));
+    const buttons=Array.from(document.querySelectorAll('button,a.button,.file-picker')).filter(visible).map(n=>({label:n.textContent.trim().slice(0,40),height:n.getBoundingClientRect().height,locate:n.matches('.map-locate'),category:n.matches('.categories button')}));
     const inputs=Array.from(document.querySelectorAll('input:not([type=checkbox]):not([type=file]),textarea,select')).filter(visible).map(n=>({size:parseFloat(getComputedStyle(n).fontSize)}));
     return {ratios,buttons,inputs};
   })()`);
   assert.ok(result.ratios.length > 0);
   for (const item of result.ratios) assert.ok(item.ratio >= 4.5, item.label + 'のコントラスト比：' + item.ratio.toFixed(2));
   if (smartphone) {
-    assert.ok(result.buttons.length > 0); for (const item of result.buttons) assert.ok(item.height >= 48, item.label + 'の高さ：' + item.height);
+    assert.ok(result.buttons.length > 0); for (const item of result.buttons) assert.ok(item.height >= (item.locate ? 40 : item.category ? 44 : 48), item.label + 'の高さ：' + item.height);
     for (const item of result.inputs) assert.ok(item.size >= 16, '入力欄の文字が16px以上');
   }
 }

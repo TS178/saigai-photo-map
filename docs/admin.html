@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex,nofollow">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp; connect-src 'self' https://script.google.com https://script.googleusercontent.com; base-uri 'self'; form-action 'none'; object-src 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp; media-src 'self' blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; base-uri 'self'; form-action 'none'; object-src 'none'">
   <title>災害写真マップ｜管理</title>
   <link rel="icon" type="image/png" href="icons/favicon.png">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
@@ -19,6 +19,7 @@
   <script defer src="js/util.js"></script>
   <script defer src="js/dom.js"></script>
   <script defer src="js/api.js"></script>
+  <script defer src="js/video.js"></script>
   <script defer src="js/geo.js"></script>
   <script defer src="js/mapbase.js"></script>
   <script defer src="js/zip.js"></script>
@@ -70,7 +71,7 @@
     <main class="admin-layout">
       <div id="view-area">
         <section id="map-view" aria-label="投稿の地図"><div id="admin-map" class="map"></div></section>
-        <section id="tiles-view" aria-label="写真のタイル" hidden></section>
+        <section id="tiles-view" aria-label="写真・動画のタイル" hidden></section>
         <section id="list-view" aria-label="投稿の一覧" hidden></section>
       </div>
       <aside id="summary-panel" aria-label="件数と新着"></aside>

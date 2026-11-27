@@ -14,7 +14,9 @@ const images = {
   'admin-cluster.png': '管理_束.png', 'admin-tiles.png': '管理_タイル.png',
   'admin-list.png': '管理_一覧.png', 'admin-detail.png': '管理_詳細.png',
   'admin-settings.png': '管理_設定.png', 'admin-past.png': '管理_過去.png',
-  'admin-print.png': '管理_印刷.png'
+  'admin-print.png': '管理_印刷.png',
+  'post-video-card.png': '投稿_動画.png', 'post-video-progress.png': '投稿_動画送信中.png',
+  'admin-detail-photo-map.png': '管理_詳細地図.png', 'admin-detail-video.png': '管理_動画詳細.png'
 };
 const missing = [];
 for (const name of Object.keys(images)) {
