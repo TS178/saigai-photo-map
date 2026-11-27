@@ -1,6 +1,6 @@
 (function (root) {
 'use strict';
-const CACHE_VERSION = 'spm-1.3.0';
+const CACHE_VERSION = 'spm-1.4.0';
 const APP_CACHE = CACHE_VERSION;
 const APP_FILES = [
   './index.html', './help.html', './config.js', './css/common.css', './css/post.css',

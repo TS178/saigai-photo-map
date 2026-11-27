@@ -46,7 +46,8 @@
       if (layer.bringToBack) layer.bringToBack(); else layer.eachLayer(function (l) { l.bringToBack(); });
       notice.hidden = !(name === 'photo' && map.getZoom() < 14);
       Object.keys(buttons).forEach(function (key) { buttons[key].textContent = buttons[key].dataset.label; buttons[key].setAttribute('aria-pressed', String(key === name)); });
-      try { root.localStorage.setItem('spm-base', name); } catch (e) { /* 保存なしでも地図は使える。 */ }
+      if (options.rememberBase !== false) { try { root.localStorage.setItem('spm-base', name); } catch (e) { /* 保存なしでも地図は使える。 */ } }
+      map.fire('spmbasechange', { base: name });
       showPanel(false);
     }
     (above ? [['osm', '標準'], ['photo', '航空写真'], ['gsiStd', '予備']] : [['osm', '標準地図'], ['photo', '航空写真'], ['gsiStd', '地理院地図（予備）']]).forEach(function (item) {
@@ -77,14 +78,14 @@
     map.on('resize', fitPanel);
     map.on('unload', function () { removed = true; if (above) panel.remove(); });
     var initial = 'osm'; try { initial = root.localStorage.getItem('spm-base') || initial; } catch (e) { /* 標準地図を使う。 */ }
-    switchBase(initial);
+    switchBase(options.base || initial);
     function rippleMarker(marker) {
       var node = marker.getElement(); if (!node) return;
       var ripple = el('span', { class: 'marker-ripple', 'aria-hidden': 'true' }); node.appendChild(ripple);
       root.setTimeout(function () { ripple.remove(); }, 2800);
     }
     // Leafletの地図を返し、共通の追加操作をまとめて持たせる。
-    map.spm = { switchBase: switchBase, setCurrent: setCurrent, setDetailOpen: setDetailOpen, rippleMarker: rippleMarker };
+    map.spm = { getBase: function () { return current; }, switchBase: switchBase, setCurrent: setCurrent, setDetailOpen: setDetailOpen, rippleMarker: rippleMarker };
     return map;
   }
   root.SPM.mapbase = { createMap: createMap };

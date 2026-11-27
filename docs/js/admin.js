@@ -13,46 +13,40 @@
   function storageFor(name) { try { return root[name]; } catch (e) { return null; } }
   function stored(storage, key) { try { return storage.getItem(key); } catch (e) { return null; } }
   function readSound() { var value = stored(storageFor('localStorage'), 'spm-sound'); return /^[1-5]$/.test(value || '') ? value : 'off'; }
-  function splitDefaults(count) { return count === 2 ? ['map', 'list'] : count === 3 ? ['map', 'tiles', 'list'] : ['map', 'tiles', 'list', 'detail']; }
   function readSplit() {
+    var result = { count: 2, maps: [], active: false };
     try {
       var value = JSON.parse(stored(storageFor('localStorage'), 'spm-split'));
-      if (value && [2, 3, 4].includes(value.count) && Array.isArray(value.views) && value.views.length === value.count && new Set(value.views).size === value.count && value.views.every(function (name) { return ['map', 'tiles', 'list', 'detail'].includes(name); })) return value;
-    } catch (e) { /* 保存が無ければ2分割で始める。 */ }
-    return { count: 2, views: splitDefaults(2) };
-  }
-  function hasView(name) { return state.view === name || state.view === 'split' && state.split.views.includes(name); }
-  function saveSplit() { try { root.localStorage.setItem('spm-split', JSON.stringify(state.split)); } catch (e) { /* 今の画面では使える。 */ } }
-  function layoutViews() {
-    var area = byId('view-area'), panes = byId('split-panes'), split = state.view === 'split';
-    ['map', 'tiles', 'list', 'detail'].forEach(function (name) { var node = byId(name + '-view'); area.appendChild(node); node.hidden = !hasView(name); });
-    dom.clear(panes); panes.hidden = !split;
-    if (split) state.split.views.forEach(function (name, index) {
-      var pane = el('section', { class: 'split-pane', 'data-pane': index }), select = el('select', { 'aria-label': '枠' + (index + 1) + 'の表示' });
-      [['map', '地図'], ['tiles', 'タイル'], ['list', '一覧'], ['detail', '詳細']].forEach(function (option) { select.appendChild(el('option', { value: option[0], text: option[1] })); });
-      select.value = name;
-      select.addEventListener('change', function () {
-        var other = state.split.views.indexOf(select.value), previous = state.split.views[index];
-        if (other >= 0) state.split.views[other] = previous;
-        state.split.views[index] = select.value; saveSplit();
-        if (!state.split.views.includes('detail')) S.adminViews.closeDetail();
-        layoutViews(); render();
+      if (!value || ![2, 3, 4].includes(value.count)) return result;
+      result.count = value.count; result.active = value.active === true;
+      // 1.3.0のviewsは分割数だけを引き継ぐ。壊れた枠は通常の地図から始める。
+      if (Array.isArray(value.maps)) result.maps = value.maps.slice(0, 4).map(function (view) {
+        return view && typeof view.lat === 'number' && Number.isFinite(view.lat) && Math.abs(view.lat) <= 90 && typeof view.lng === 'number' && Number.isFinite(view.lng) && Math.abs(view.lng) <= 180 && Number.isInteger(view.zoom) && view.zoom >= 9 && view.zoom <= 19 && ['osm', 'photo', 'gsiStd'].includes(view.base) ? { lat: view.lat, lng: view.lng, zoom: view.zoom, base: view.base } : null;
       });
-      pane.append(el('label', { class: 'pane-heading' }, [el('span', { text: '枠' + (index + 1), class: 'visually-hidden' }), select]), byId(name + '-view')); panes.appendChild(pane);
-    });
-    panes.dataset.count = state.split.count;
+    } catch (e) { /* 保存が無ければ2分割で始める。 */ }
+    return result;
+  }
+  if (state.split.active && root.innerWidth >= 900) state.view = 'split';
+  function hasView(name) { return state.view === name || state.view === 'split' && name === 'map'; }
+  function saveSplit() {
+    // mapsは操作時の値を保ち、配置や復元のたびに地図から取り直さない。
+    try { var value = JSON.stringify(state.split); if (root.localStorage.getItem('spm-split') !== value) root.localStorage.setItem('spm-split', value); } catch (e) { /* 今の画面では使える。 */ }
+  }
+  function layoutViews() {
+    var panes = byId('split-panes'), split = state.view === 'split';
+    ['map', 'tiles', 'list'].forEach(function (name) { byId(name + '-view').hidden = split || state.view !== name; });
+    panes.hidden = !split; panes.dataset.count = state.split.count;
     byId('admin-app').classList.toggle('is-split', split);
     byId('split-count').hidden = !split; byId('summary-panel').hidden = split;
     (split ? byId('header-notices') : document.body).appendChild(byId('toast'));
     (split ? byId('header-notices') : byId('result-notices')).prepend(byId('new-notice'));
     document.querySelectorAll('[data-split-count]').forEach(function (node) { var selected = Number(node.dataset.splitCount) === state.split.count; node.setAttribute('aria-pressed', String(selected)); node.classList.toggle('secondary', !selected); });
-    S.adminMap.resize(); S.adminViews.resizeDetail();
+    S.adminMap.layout(); S.adminMap.resize(); S.adminViews.resizeDetail();
     root.setTimeout(function () { if (state.token && state.d && cache().loaded) S.adminMap.initialView(groups()); }, 0);
   }
   function setSplitCount(count) {
     if (![2, 3, 4].includes(count)) return;
-    if (state.split.count !== count) { S.adminViews.closeDetail(); state.split = { count: count, views: splitDefaults(count) }; saveSplit(); }
-    setView('split');
+    S.adminMap.cancelEdit(); state.split.count = count; saveSplit(); setView('split');
   }
   function cache(id) {
     id = id || state.d;
@@ -125,8 +119,9 @@
     S.adminMap.render(posts); S.adminViews.render(posts);
   }
   function setView(view) {
-    if (view !== 'split') S.adminViews.closeDetail();
-    state.view = view;
+    if (view === 'split' && root.innerWidth < 900) view = 'map';
+    S.adminMap.cancelEdit();
+    state.view = view; state.split.active = view === 'split'; saveSplit();
     layoutViews();
     document.querySelectorAll('[data-view]').forEach(function (button) { var active = button.dataset.view === view; button.classList.toggle('secondary', !active); button.setAttribute('aria-pressed', String(active)); });
     render();
@@ -138,7 +133,7 @@
   function logout(message) {
     state.epoch++; state.token = ''; state.settings = {}; state.disasters = []; state.d = '';
     state.caches.clear(); state.photos.clear(); state.unread.clear(); state.opened.clear(); state.selected.clear();
-    loading.clear(); root.clearTimeout(timer); root.clearTimeout(stateTimer); stateLoading = null; clearStored(); S.adminViews.close(); S.adminViews.closeDetail(); S.adminMap.destroy();
+    loading.clear(); root.clearTimeout(timer); root.clearTimeout(stateTimer); stateLoading = null; clearStored(); S.adminViews.close(); S.adminMap.destroy();
     byId('print-mode').hidden = true; byId('admin-app').hidden = true; byId('login').hidden = false; document.body.classList.remove('admin-active');
     document.body.appendChild(byId('toast'));
     dom.clear(byId('print-pages')); dom.clear(byId('summary-panel')); dom.clear(byId('tiles-view')); dom.clear(byId('list-view'));
@@ -240,7 +235,7 @@
   }
   async function switchDisaster(id) {
     if (!state.token) return;
-    S.adminViews.close(); S.adminViews.closeDetail(); S.adminMap.cancelEdit();
+    S.adminViews.close(); S.adminMap.cancelEdit();
     S.mediaCache.clear(); state.d = id; state.selected.clear(); S.adminMap.resetView();
     render(); if (cache().loaded) S.adminMap.initialView(groups()); persist(); await load(false); schedule();
   }
@@ -370,9 +365,8 @@
     document.querySelectorAll('[data-split-count]').forEach(function (button) { button.addEventListener('click', function () { setSplitCount(Number(button.dataset.splitCount)); }); });
     byId('unlocated-button').addEventListener('click', S.adminMap.unlocated);
     document.addEventListener('pointerdown', armSound); document.addEventListener('keydown', armSound);
-    if (root.ResizeObserver) new root.ResizeObserver(function () { S.adminMap.resize(); }).observe(byId('admin-map'));
-    root.addEventListener('resize', function () { S.adminMap.resize(); S.adminViews.resizeDetail(); });
-    byId('new-notice').addEventListener('click', function () { var p = filtered().find(function (item) { return state.unread.has(state.d + ':' + item.pid); }); if (p) { if (hasView('detail')) S.adminViews.detail(p.pid); else S.adminMap.focus(p.pid); } });
+    root.addEventListener('resize', function () { if (root.innerWidth < 900 && state.view === 'split') setView('map'); S.adminMap.resize(); S.adminViews.resizeDetail(); });
+    byId('new-notice').addEventListener('click', function () { var p = filtered().find(function (item) { return state.unread.has(state.d + ':' + item.pid); }); if (p) S.adminMap.focus(p.pid); });
     document.addEventListener('visibilitychange', function () { schedule(); scheduleState(); S.mediaCache.resume(); if (!document.hidden) { prefetchRecent(); refreshState(); } });
     root.addEventListener('online', function () { if (isCurrent()) load(false); schedule(); });
     if (!S.api.getUrl()) { byId('login-error').textContent = '設定が済んでいません（config.js に GAS の URL を入れてください）'; byId('login-button').disabled = true; return; }
@@ -389,6 +383,6 @@
       await enter();
     }
   }
-  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, hasView: hasView, setSplitCount: setSplitCount, testSound: testSound, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, hover: hover, prefetchPost: prefetchPost, prefetchItem: prefetchItem, enablePrefetch: enablePrefetch, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
+  S.admin = { state: state, byId: byId, cache: cache, groups: groups, filtered: filtered, targets: targets, currentDisaster: currentDisaster, isCurrent: isCurrent, render: render, setView: setView, hasView: hasView, saveSplit: saveSplit, setSplitCount: setSplitCount, testSound: testSound, request: request, update: update, remove: remove, configure: configure, refreshState: refreshState, photo: photo, hover: hover, prefetchPost: prefetchPost, prefetchItem: prefetchItem, enablePrefetch: enablePrefetch, markOpened: markOpened, enableSound: enableSound, switchDisaster: switchDisaster };
   document.addEventListener('DOMContentLoaded', function () { init().catch(function () { byId('login-error').textContent = '画面の準備ができませんでした。ページを読み直してください。'; }); });
 })(typeof window !== 'undefined' ? window : globalThis);

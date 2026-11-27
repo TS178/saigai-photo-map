@@ -1,7 +1,7 @@
 (function (root) {
   'use strict';
   root.SPM = root.SPM || {};
-  var S = root.SPM, dom = S.dom, el = dom.el, active = null, paneDetail = null, serial = 0;
+  var S = root.SPM, dom = S.dom, el = dom.el, active = null, serial = 0;
   var statuses = ['未確認', '確認済', '対応中', '対応済'], statusClasses = ['status-new', 'status-checked', 'status-working', 'status-done'];
   var sources = { gps: '現在地(GPS)', exif: '写真の位置情報', map: '地図で指定', gmap: 'Googleマップ', landmark: '目印', none: '位置なし', admin: '管理者が修正' };
   function button(text, handler, className) {
@@ -21,21 +21,7 @@
     if (previous.onClose) previous.onClose();
     if (previous.focus && previous.focus.isConnected) previous.focus.focus();
   }
-  function closeDetail() {
-    if (!paneDetail) return;
-    var previous = paneDetail; paneDetail = null; previous.closed = true;
-    if (previous.onClose) previous.onClose();
-    dom.clear(S.admin.byId('detail-view')).appendChild(el('p', { class: 'empty-state', text: '投稿を選ぶと詳細が出ます。' }));
-  }
-  function detailBox(title, cleanup) {
-    close(); closeDetail();
-    if (!S.admin.hasView('detail')) return modal(title, cleanup);
-    var area = S.admin.byId('detail-view'), body = el('div', { class: 'dialog-body stack' });
-    var box = { body: body, closed: false, onClose: cleanup };
-    dom.clear(area); area.append(el('div', { class: 'dialog-heading row' }, [el('h2', { text: title }), button('閉じる', closeDetail, 'secondary')]), body);
-    paneDetail = box; return box;
-  }
-  function resizeDetail() { if (paneDetail && paneDetail.resize) paneDetail.resize(); }
+  function resizeDetail() { if (active && active.resize) active.resize(); }
   function modal(title, onClose) {
     close();
     var headingId = 'dialog-title-' + (++serial), overlay = el('div', { class: 'modal-overlay' });
@@ -186,7 +172,7 @@
       if (player) { player.pause(); player.removeAttribute('src'); player.load(); player = null; }
       if (mediaHandle) { mediaHandle.release(); mediaHandle = null; }
     }
-    var box = detailBox('No.' + post.no + ' の詳細', function () { photoSerial++; releaseMedia(); if (miniMap) { miniMap.remove(); miniMap = null; } });
+    var box = modal('No.' + post.no + ' の詳細', function () { photoSerial++; releaseMedia(); if (miniMap) { miniMap.remove(); miniMap = null; } });
     box.resize = function () { root.requestAnimationFrame(function () { if (!box.closed && miniMap) miniMap.invalidateSize({ animate: false }); }); };
     var index = Math.max(0, post.photos.findIndex(function (p) { return p.id === photoId; })), photoSerial = 0;
     async function showPhoto() {
@@ -262,7 +248,7 @@
     box.body.append(field('区分を変更', category), urgent.label, button('区分・至急を保存', function () { return patch({ cat: category.value, urgent: urgent.input.checked }, true); }));
     box.body.appendChild(button(S.adminMap.located(post) ? '位置を直す' : '地図を押して置く', function () { S.adminMap.startEdit(post, !S.adminMap.located(post)); }, 'secondary'));
     box.body.appendChild(button(post.hidden ? '表示に戻す' : '非表示にする', function () {
-      confirm('No.' + post.no + 'を' + (post.hidden ? '表示に戻しますか？' : '非表示にしますか？ 写真と記録は残ります。'), async function () { if (await S.admin.update(pid, { hidden: !post.hidden }, d)) { close(); closeDetail(); } });
+      confirm('No.' + post.no + 'を' + (post.hidden ? '表示に戻しますか？' : '非表示にしますか？ 写真と記録は残ります。'), async function () { if (await S.admin.update(pid, { hidden: !post.hidden }, d)) { close(); } });
     }, 'secondary'));
     function reopen() {
       var remaining = S.admin.groups().find(function (p) { return p.pid === pid; });
@@ -275,7 +261,7 @@
     box.body.appendChild(el('div', { class: 'detail-remove-tools stack' }, [removeOne, button('この投稿をまるごと削除（写真・動画 ' + post.photos.length + '件）', function () { confirmRemove(post.photos, d, null, function () { detail(pid, post.photos[index].id); }); }, 'danger')]));
     box.refreshDetail = function () {
       var current = S.admin.groups().find(function (p) { return p.pid === pid; });
-      if (!current) { if (paneDetail === box) closeDetail(); else close(); return; }
+      if (!current) { close(); return; }
       if (current.photos.map(function (p) { return p.id; }).join(',') !== post.photos.map(function (p) { return p.id; }).join(',')) {
         var photo = post.photos[index];
         detail(pid, current.photos.some(function (p) { return p.id === photo.id; }) ? photo.id : current.photos[Math.min(index, current.photos.length - 1)].id);
@@ -350,7 +336,7 @@
     box.refreshSettings();
   }
   function refreshSettings() { if (active && active.refreshSettings) active.refreshSettings(); }
-  function refreshDetail() { if (active && active.refreshDetail) active.refreshDetail(); if (paneDetail && paneDetail.refreshDetail) paneDetail.refreshDetail(); }
+  function refreshDetail() { if (active && active.refreshDetail) active.refreshDetail(); }
   function stamp(date) { var text = S.util.formatJst(date); return text.slice(0, 10).replace(/\//g, '') + '-' + text.slice(11, 16).replace(':', ''); }
   function exportName(extension, disaster) { return S.util.safeFileName('災害写真_' + (disaster ? disaster.name : '記録') + '_' + stamp(new Date()), 150) + '.' + extension; }
   function exportsDialog() {
@@ -452,5 +438,5 @@
     S.admin.byId('print-now').addEventListener('click', function () { root.print(); });
     S.admin.byId('print-back').addEventListener('click', function () { S.admin.byId('print-mode').hidden = true; dom.clear(S.admin.byId('print-pages')); S.admin.byId('admin-app').hidden = false; root.document.body.classList.add('admin-active'); S.adminMap.resize(); });
   }
-  S.adminViews = { init: init, render: render, button: button, modal: modal, close: close, closeDetail: closeDetail, resizeDetail: resizeDetail, confirm: confirm, detail: detail, settings: settings, refreshSettings: refreshSettings, refreshDetail: refreshDetail, filters: filters, printMode: printMode };
+  S.adminViews = { init: init, render: render, button: button, modal: modal, close: close, resizeDetail: resizeDetail, confirm: confirm, detail: detail, settings: settings, refreshSettings: refreshSettings, refreshDetail: refreshDetail, filters: filters, printMode: printMode };
 })(typeof window !== 'undefined' ? window : globalThis);
