@@ -1,10 +1,10 @@
 (function (root) {
 'use strict';
-const CACHE_VERSION = 'spm-1.2.1';
-// 同じ製品版の修正でも、保存済みの古い動画送信処理を入れ替える。
-const APP_CACHE = CACHE_VERSION + '-video-resume-1';
+const CACHE_VERSION = 'spm-1.2.2';
+const APP_CACHE = CACHE_VERSION;
 const APP_FILES = [
   './index.html', './help.html', './config.js', './css/common.css', './css/post.css',
+  './fonts/noto-sans-jp/noto-sans-jp.css',
   './js/util.js', './js/dom.js', './js/api.js', './js/exif.js', './js/coords.js',
   './js/export.js', './js/geo.js', './js/photo.js', './js/video.js', './js/outbox.js', './js/mapbase.js', './js/post.js',
   './vendor/leaflet/leaflet.js', './vendor/leaflet/leaflet.css',
@@ -46,7 +46,10 @@ self.addEventListener('fetch', function (event) {
   if (event.request.method !== 'GET' || url.origin !== scopeUrl.origin) return;
   url.search = ''; url.hash = '';
   if (url.pathname === scopeUrl.pathname) url.pathname += 'index.html';
-  if (!allowed.has(url.href)) return;
+  // 分割フォントは先読みせず、実際に使った同一サイトのファイルだけを保存する。
+  const fontFolder = new URL('fonts/', scopeUrl).pathname;
+  const isFont = url.pathname.startsWith(fontFolder) && url.pathname.endsWith('.woff2');
+  if (!allowed.has(url.href) && !isFont) return;
   if (url.href === new URL('config.js', scopeUrl).href) { event.respondWith(networkFirst(event.request, url.href, 3000)); return; }
   if (event.request.mode === 'navigate') { event.respondWith(networkFirst(event.request, url.href)); return; }
   event.respondWith((async function () {

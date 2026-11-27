@@ -7,6 +7,7 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' file:; style-src 'self' file: 'unsafe-inline'; img-src 'self' file: data: blob: https://tile.openstreetmap.org https://cyberjapandata.gsi.go.jp; media-src 'self' blob:; connect-src 'self' https://script.google.com https://script.googleusercontent.com; base-uri 'self'; form-action 'none'; object-src 'none'">
   <title>災害写真マップ｜管理</title>
   <link rel="icon" type="image/png" href="icons/favicon.png">
+  <link rel="stylesheet" href="fonts/noto-sans-jp/noto-sans-jp.css">
   <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="vendor/markercluster/MarkerCluster.css">
   <link rel="stylesheet" href="css/common.css">
@@ -50,7 +51,7 @@
         <h1 id="app-name">災害写真マップ</h1>
         <label class="disaster-select" for="disaster-select">表示する災害・訓練<select id="disaster-select"></select></label>
         <span id="acceptance" class="badge"></span>
-        <button id="reload" type="button" class="secondary">↻ 全部読み直す</button>
+        <button id="reload" type="button" class="secondary">全部読み直す</button>
       </div>
       <nav class="row" aria-label="管理の操作">
         <div class="row" role="group" aria-label="表示の切替">

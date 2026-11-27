@@ -65,7 +65,7 @@
     });
     select.value = state.d; select.disabled = !state.disasters.length;
     var accepting = state.settings.accepting, badge = byId('acceptance');
-    badge.textContent = accepting ? '● 受付中' : '■ 停止中'; badge.className = 'badge ' + (accepting ? 'accepting' : 'warning');
+    badge.textContent = accepting ? '受付中' : '停止中'; badge.className = 'badge ' + (accepting ? 'accepting' : 'warning');
     var d = currentDisaster();
     dom.banner('warning', d && !isCurrent() ? '過去の災害『' + d.name + '』を表示中（新しい投稿はここには入りません）' : '', 'past-banner');
     versionNotice();
@@ -221,7 +221,7 @@
     persist();
     if (state.d === id) { render(); S.adminViews.refreshDetail(); }
     dom.toast(reply.message ? S.util.userMessage(reply, '削除後のファイルをドライブで確認してください。') : numbers.size ? Array.from(numbers, function (n) { return 'No.' + n; }).join('・') + ' を削除しました' : '対象の投稿はすでに削除されています。');
-    if (state.d === id) load(true).catch(function (e) { if (state.token) dom.toast(S.util.userMessage(e, '削除後の一覧を読み直せませんでした。「↻ 全部読み直す」を押してください。')); });
+    if (state.d === id) load(true).catch(function (e) { if (state.token) dom.toast(S.util.userMessage(e, '削除後の一覧を読み直せませんでした。「全部読み直す」を押してください。')); });
     return true;
   }
   async function configure(payload) {

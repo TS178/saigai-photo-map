@@ -59,7 +59,7 @@
       if (!drawn) {
         canvas.width = 320; canvas.height = 180;
         var ctx = canvas.getContext('2d'); ctx.fillStyle = '#e2e6eb'; ctx.fillRect(0, 0, 320, 180);
-        ctx.fillStyle = '#1a1a1a'; ctx.font = 'bold 28px sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('▶ 動画', 160, 90);
+        ctx.fillStyle = '#1a1a1a'; ctx.font = '700 28px "Noto Sans JP", "Noto Sans CJK JP", "SPM Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('動画', 160, 90);
       }
       async function encode(quality) {
         var blob = await new Promise(function (resolve) { canvas.toBlob(resolve, 'image/jpeg', quality); });

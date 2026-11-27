@@ -31,7 +31,7 @@
     aimLines.setAttribute('d', 'M12 1v6m0 10v6M1 12h6m10 0h6');
     [aimCircle, aimLines].forEach(function (node) { node.setAttribute('fill', 'none'); node.setAttribute('stroke', 'currentColor'); node.setAttribute('stroke-width', '2'); svg.appendChild(node); });
     locate.appendChild(svg);
-    var toggle = el('button', { type: 'button', 'aria-expanded': 'false', text: '🗺️ 地図の種類' });
+    var toggle = el('button', { type: 'button', 'aria-expanded': 'false', text: '地図の種類' });
     var controlsElement = el('div', { class: 'map-tools' }, above ? [locate] : [locate, toggle, panel]);
     if (above) element.parentNode.insertBefore(panel, element);
     function fitPanel() {
@@ -45,7 +45,7 @@
       current = name; var layer = makeLayer(name); layer.addTo(map);
       if (layer.bringToBack) layer.bringToBack(); else layer.eachLayer(function (l) { l.bringToBack(); });
       notice.hidden = !(name === 'photo' && map.getZoom() < 14);
-      Object.keys(buttons).forEach(function (key) { buttons[key].textContent = (key === name ? '✓ ' : '') + buttons[key].dataset.label; buttons[key].setAttribute('aria-pressed', String(key === name)); });
+      Object.keys(buttons).forEach(function (key) { buttons[key].textContent = buttons[key].dataset.label; buttons[key].setAttribute('aria-pressed', String(key === name)); });
       try { root.localStorage.setItem('spm-base', name); } catch (e) { /* 保存なしでも地図は使える。 */ }
       showPanel(false);
     }

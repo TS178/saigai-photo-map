@@ -14,7 +14,7 @@
     var b64 = thumb(p);
     if (b64) card.appendChild(el('img', { src: 'data:image/jpeg;base64,' + b64, alt: 'No.' + p.no + 'の写真', draggable: 'false' }));
     else card.appendChild(el('span', { class: 'thumb-empty', text: '写真' }));
-    if (p.photos[0].kind === 'video') card.appendChild(el('span', { class: 'media-label', text: '▶ ' + (S.video.formatDuration(p.photos[0].duration) || '動画') }));
+    if (p.photos[0].kind === 'video') card.appendChild(el('span', { class: 'media-label', text: '動画' + (S.video.formatDuration(p.photos[0].duration) ? ' ' + S.video.formatDuration(p.photos[0].duration) : '') }));
     if (!bundle) {
       card.appendChild(el('span', { class: 'photo-count', text: p.photos.length > 1 ? p.photos.length + '枚' : 'No.' + p.no }));
       if (p.urgent) card.appendChild(el('span', { class: 'urgent-label', text: '至急' }));
@@ -42,7 +42,7 @@
     var wrapper = el('div', { class: 'sticky-bundle', 'aria-label': children.length + '投稿のまとまり' });
     if (posts.length) wrapper.appendChild(note(posts[0], true));
     wrapper.appendChild(el('span', { class: 'bundle-count', text: children.length + '件' }));
-    if (posts.some(function (p) { return p.urgent; })) wrapper.appendChild(el('span', { class: 'bundle-urgent', text: '● 至急あり' }));
+    if (posts.some(function (p) { return p.urgent; })) wrapper.appendChild(el('span', { class: 'bundle-urgent', text: '至急あり' }));
     return root.L.divIcon({ html: wrapper, className: 'bundle-marker', iconSize: [100, 112], iconAnchor: [50, 56] });
   }
   function init() {
@@ -88,7 +88,7 @@
     });
     cluster.refreshClusters();
     var missing = posts.filter(function (p) { return !located(p); }), button = root.document.getElementById('unlocated-button');
-    button.textContent = '📍 位置なし ' + missing.length + '件'; button.disabled = !missing.length;
+    button.textContent = '位置なし ' + missing.length + '件'; button.disabled = !missing.length;
   }
   function initialView(posts) {
     if (!map || !needsView || S.admin.byId('map-view').hidden) return;
@@ -135,7 +135,7 @@
     bar.appendChild(S.adminViews.button('やめる', function () { cancelEdit(); S.admin.render(); }, 'secondary'));
   }
   function placeAt(ll) {
-    if (!edit.marker) edit.marker = root.L.marker(ll, { draggable: true, icon: root.L.divIcon({ html: el('span', { class: 'place-pin', text: '📍' }), className: 'place-marker', iconSize: [48, 48], iconAnchor: [24, 44] }) }).addTo(map);
+    if (!edit.marker) edit.marker = root.L.marker(ll, { draggable: true, icon: root.L.divIcon({ html: el('span', { class: 'place-pin', text: '位置' }), className: 'place-marker', iconSize: [48, 48], iconAnchor: [24, 44] }) }).addTo(map);
     else edit.marker.setLatLng(ll);
     positionBar('No.' + edit.no + 'をここに置きます（' + ll.lat.toFixed(6) + ', ' + ll.lng.toFixed(6) + '）。合っているか確認してください。', true);
   }
@@ -169,7 +169,7 @@
     if (!posts.length) dialog.body.appendChild(el('p', { text: '位置なしの投稿はありません。' }));
   }
   function addMissingControl() {
-    var control = root.L.control({ position: 'topleft' }), button = el('button', { id: 'unlocated-button', type: 'button', text: '📍 位置なし 0件' });
+    var control = root.L.control({ position: 'topleft' }), button = el('button', { id: 'unlocated-button', type: 'button', text: '位置なし 0件' });
     control.onAdd = function () { var box = el('div', { class: 'missing-control' }, [button]); root.L.DomEvent.disableClickPropagation(box); root.L.DomEvent.disableScrollPropagation(box); return box; };
     control.addTo(map); button.addEventListener('click', unlocated);
   }

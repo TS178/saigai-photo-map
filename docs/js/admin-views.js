@@ -64,7 +64,7 @@
   function photoThumb(photo, d) {
     var b64 = S.admin.cache(d).thumbs.get(photo.id);
     var wrapper = el('span', { class: 'media-thumb' }, [b64 ? el('img', { src: 'data:image/jpeg;base64,' + b64, alt: 'No.' + photo.no + '-' + photo.n + (photo.kind === 'video' ? 'の動画' : 'の写真'), loading: 'lazy' }) : el('span', { class: 'thumb-empty', text: '画像の準備中' })]);
-    if (photo.kind === 'video') wrapper.appendChild(el('span', { class: 'media-label', text: '▶ ' + (S.video.formatDuration(photo.duration) || '動画') }));
+    if (photo.kind === 'video') wrapper.appendChild(el('span', { class: 'media-label', text: '動画' + (S.video.formatDuration(photo.duration) ? ' ' + S.video.formatDuration(photo.duration) : '') }));
     return wrapper;
   }
   function tileView(posts) {
@@ -75,7 +75,7 @@
     photos.forEach(function (row) {
       var p = row.p, node = button('', function () { detail(p.pid, row.photo.id); }, 'tile secondary' + (p.hidden ? ' is-hidden' : ''));
       node.append(photoThumb(row.photo), el('strong', { text: 'No.' + p.no + '-' + row.photo.n }), el('span', { text: row.photo.shot || row.photo.at }), badge(p.cat), statusBadge(p.status));
-      if (p.urgent) node.appendChild(badge('! 至急', 'urgent'));
+      if (p.urgent) node.appendChild(badge('至急', 'urgent'));
       S.admin.hover(node, p.pid); area.appendChild(node);
     });
     if (!photos.length) area.appendChild(el('p', { class: 'empty-state', text: '表示する写真はありません。絞り込みの条件も確認してください。' }));
@@ -93,7 +93,7 @@
     tr.appendChild(el('th', { scope: 'col' }, [selectAll.label]));
     [['No.', 'no'], ['受付日時', 'at'], ['区分', 'cat'], ['至急', 'urgent'], ['状況', 'status'], ['投稿者（所属）', 'who'], ['コメント', 'note'], ['写真・動画', 'count'], ['場所', 'location']].forEach(function (column) {
       var sort = S.admin.state.sort, th = el('th', { scope: 'col', 'aria-sort': sort.key === column[1] ? sort.direction === 1 ? 'ascending' : 'descending' : 'none' });
-      th.appendChild(button(column[0] + (sort.key === column[1] ? sort.direction === 1 ? ' ▲' : ' ▼' : ''), function () { if (sort.key === column[1]) sort.direction *= -1; else { sort.key = column[1]; sort.direction = 1; } listView(S.admin.filtered()); }, 'secondary')); tr.appendChild(th);
+      th.appendChild(button(column[0], function () { if (sort.key === column[1]) sort.direction *= -1; else { sort.key = column[1]; sort.direction = 1; } listView(S.admin.filtered()); }, 'secondary')); tr.appendChild(th);
     });
     head.appendChild(tr);
     function value(p, key) { return key === 'count' ? p.photos.length : key === 'location' ? S.adminMap.located(p) ? p.lat : -Infinity : p[key]; }
@@ -103,9 +103,10 @@
       select.label.addEventListener('click', function (event) { event.stopPropagation(); });
       row.appendChild(el('td', {}, [select.label]));
       row.appendChild(el('td', {}, [button('No.' + p.no, function () { detail(p.pid); }, 'secondary')]));
-      row.append(el('td', { text: p.at }), el('td', {}, [badge(p.cat)]), el('td', {}, [p.urgent ? badge('! 至急', 'urgent') : '']), el('td', {}, [statusBadge(p.status)]), el('td', { text: p.who + (p.org ? '（' + p.org + '）' : '') }), el('td', {}, [el('div', { class: 'line-clamp', text: p.note })]), el('td', { text: p.photos.length + '件' }));
+      row.append(el('td', { text: p.at }), el('td', {}, [badge(p.cat)]), el('td', {}, [p.urgent ? badge('至急', 'urgent') : '']), el('td', {}, [statusBadge(p.status)]), el('td', { text: p.who + (p.org ? '（' + p.org + '）' : '') }), el('td', {}, [el('div', { class: 'line-clamp', text: p.note })]), el('td', { text: p.photos.length + '件' }));
       var previews = el('div', { class: 'list-previews' });
-      p.photos.filter(function (photo) { return photo.kind === 'video'; }).forEach(function (photo) { previews.appendChild(photoThumb(photo)); });
+      p.photos.slice(0, 3).forEach(function (photo) { previews.appendChild(photoThumb(photo)); });
+      if (p.photos.length > 3) previews.appendChild(el('span', { class: 'list-more', text: '＋' + (p.photos.length - 3) }));
       row.cells[8].appendChild(previews);
       row.appendChild(el('td', {}, [el('span', { text: S.adminMap.located(p) ? p.lat + ', ' + p.lng : '位置なし' }), button('地図で見る', function () { S.adminMap.focus(p.pid); }, 'secondary')]));
       S.admin.hover(row, p.pid); row.addEventListener('click', function () { detail(p.pid); }); body.appendChild(row);
@@ -134,7 +135,7 @@
     posts.slice().sort(function (a, b) { return b.no - a.no; }).forEach(function (p) {
       var unread = S.admin.state.unread.has(S.admin.state.d + ':' + p.pid), node = button('', function () { detail(p.pid); }, 'recent-item secondary');
       node.append(photoThumb(p.photos[0]), el('span', {}, [el('strong', { text: (unread ? 'NEW ' : '') + 'No.' + p.no + ' ' + p.cat }), el('span', { class: 'line-clamp', text: p.note || 'コメントなし' }), statusBadge(p.status)]));
-      if (p.urgent) node.appendChild(badge('! 至急', 'urgent')); S.admin.hover(node, p.pid); list.appendChild(node);
+      if (p.urgent) node.appendChild(badge('至急', 'urgent')); S.admin.hover(node, p.pid); list.appendChild(node);
     });
     if (!posts.length) list.appendChild(el('p', { text: '投稿が届くと、ここに表示されます。' }));
     box.appendChild(list); area.appendChild(box);
@@ -174,7 +175,7 @@
       dom.clear(photoArea);
       var thumbnail = S.admin.cache(d).thumbs.get(photo.id);
       if (thumbnail) photoArea.appendChild(el('img', { src: 'data:image/jpeg;base64,' + thumbnail, alt: 'No.' + post.no + '-' + photo.n + 'のプレビュー', class: 'detail-photo detail-preview' }));
-      var status = el('p', { class: 'detail-loading', text: photo.kind === 'video' ? '▶ 動画を読み込み中…' : '高画質を読み込み中…', role: 'status' });
+      var status = el('p', { class: 'detail-loading', text: photo.kind === 'video' ? '動画を読み込み中…' : '高画質を読み込み中…', role: 'status' });
       var progress = el('progress', { max: '1', value: '0', class: 'detail-progress', 'aria-label': '動画の読み込み', hidden: photo.kind !== 'video' });
       photoArea.append(status, progress);
       photoCount.textContent = (index + 1) + ' / ' + post.photos.length + '件'; shot.textContent = '撮影日時：' + (photo.shot || '記録なし'); previous.disabled = index <= 0; next.disabled = index >= post.photos.length - 1;
@@ -182,7 +183,7 @@
       try {
         mediaHandle = S.mediaCache.acquire(d, photo, 0, function (value) {
           if (box.closed || requestNumber !== photoSerial) return;
-          status.textContent = '▶ ' + value.text; progress.hidden = false; progress.max = value.total; progress.value = value.loaded;
+          status.textContent = value.text; progress.hidden = false; progress.max = value.total; progress.value = value.loaded;
         });
         var entry = await mediaHandle.promise;
         if (box.closed || requestNumber !== photoSerial) return;
@@ -224,7 +225,7 @@
       mapColumn.append(button('大きな地図で見る', function () { close(); S.adminMap.focus(pid); }, 'secondary'), el('a', { href: S.exporter.googleMapsUrl(post.lat, post.lng), target: '_blank', rel: 'noopener', text: 'Googleマップで開く' }));
     } else mapColumn.appendChild(el('p', { text: '位置なし（「地図を押して置く」で置けます）' }));
     var info = el('dl', { class: 'detail-info' });
-    [['受付日時', post.at], ['区分', post.cat], ['至急', post.urgent ? '! 至急' : 'なし'], ['投稿者', post.who || '未記入'], ['所属', post.org || '未記入'], ['コメント', post.note || '未記入'], ['位置', S.adminMap.located(post) ? post.lat + ', ' + post.lng : '位置なし'], ['位置の取り方', sources[post.src] || post.src], ['精度', typeof post.acc === 'number' ? '±' + post.acc + 'm' : '記録なし']].forEach(function (entry) { info.append(el('dt', { text: entry[0] }), el('dd', { text: entry[1] })); });
+    [['受付日時', post.at], ['区分', post.cat], ['至急', post.urgent ? '至急' : 'なし'], ['投稿者', post.who || '未記入'], ['所属', post.org || '未記入'], ['コメント', post.note || '未記入'], ['位置', S.adminMap.located(post) ? post.lat + ', ' + post.lng : '位置なし'], ['位置の取り方', sources[post.src] || post.src], ['精度', typeof post.acc === 'number' ? '±' + post.acc + 'm' : '記録なし']].forEach(function (entry) { info.append(el('dt', { text: entry[0] }), el('dd', { text: entry[1] })); });
     box.body.appendChild(info);
     async function patch(value, redraw) { if (await S.admin.update(pid, value, d)) { if (!box.closed && redraw) detail(pid, post.photos[index].id); return true; } return false; }
     var statusControls = el('div', { class: 'row', role: 'group', 'aria-label': '状況を変更' });
@@ -398,7 +399,7 @@
             image = imageUrl || b64 ? await decodeImage(imageUrl || 'data:image/jpeg;base64,' + b64, 'No.' + p.no + '-' + item.n) : el('span', { class: 'thumb-empty', text: '動画' });
           } finally { if (imageHandle) imageHandle.release(); }
           if (cancelled) return;
-          if (item.kind === 'video') images.appendChild(el('figure', { class: 'print-video' }, [image, el('figcaption', { text: '▶ 動画' + (S.video.formatDuration(item.duration) ? '（' + S.video.formatDuration(item.duration) + '）' : '') })]));
+          if (item.kind === 'video') images.appendChild(el('figure', { class: 'print-video' }, [image, el('figcaption', { text: '動画' + (S.video.formatDuration(item.duration) ? ' ' + S.video.formatDuration(item.duration) : '') })]));
           else images.appendChild(image);
           done++; progress.value = done;
         }

@@ -48,15 +48,15 @@
   }
   function positionText(p) {
     if (p.src === 'none') return '位置なし（本部であとで置く）';
-    if (!validPoint(p)) return '⚠ 場所が未設定';
-    var names = { exif: '📍 写真の位置情報', gps: '現在地(GPS)', map: '地図で指定', gmap: 'Googleマップ', landmark: '目印' };
+    if (!validPoint(p)) return '場所が未設定';
+    var names = { exif: '写真の位置情報', gps: '現在地(GPS)', map: '地図で指定', gmap: 'Googleマップ', landmark: '目印' };
     return (names[p.src] || '場所を指定済み') + '：' + p.lat.toFixed(6) + ', ' + p.lng.toFixed(6);
   }
   function image(record) {
     var url = root.URL.createObjectURL(new Blob([record.thumb], { type: 'image/jpeg' })); objectUrls.push(url);
     var img = el('img', { src: url, alt: record.kind === 'video' ? '選んだ動画' : '選んだ写真', loading: 'lazy' });
     if (record.kind !== 'video') return img;
-    return el('span', { class: 'video-thumb' }, [img, el('span', { class: 'video-label', text: '▶ ' + (S.video.formatDuration(record.duration) || '動画') })]);
+    return el('span', { class: 'video-thumb' }, [img, el('span', { class: 'video-label', text: '動画' + (S.video.formatDuration(record.duration) ? ' ' + S.video.formatDuration(record.duration) : '') })]);
   }
   function previewPhoto(record, index, trigger) {
     if (photoPreview) photoPreview.close();
@@ -98,7 +98,7 @@
     else navigate('home', true);
   }
   function heading(title, withBack) {
-    if (withBack) { var node = button('← 戻る', back, true); node.classList.add('back'); main.appendChild(node); }
+    if (withBack) { var node = button('戻る', back, true); node.classList.add('back'); main.appendChild(node); }
     main.appendChild(el('h2', { text: title }));
   }
   function setField(patch) {
@@ -125,17 +125,17 @@
   function metadata(record, onChange) {
     var box = el('div', { class: 'stack' }), categories = el('div', { class: 'categories', role: 'group', 'aria-label': '区分を選ぶ' }), choices = [];
     (settings.categories || [{ name: 'その他', color: '#6b7280' }]).forEach(function (category) {
-      var dot = el('span', { class: 'category-dot', 'aria-hidden': 'true' }); dot.style.backgroundColor = /^#[0-9a-f]{6}$/i.test(category.color) ? category.color : '#6b7280';
       var node = button('', function () { record.cat = category.name; onChange(); update(); });
-      node.append(dot, el('span', { text: category.name })); node.dataset.cat = category.name; choices.push(node); categories.appendChild(node);
+      node.style.borderLeftColor = /^#[0-9a-f]{6}$/i.test(category.color) ? category.color : '#6b7280';
+      node.appendChild(el('span', { text: category.name })); node.dataset.cat = category.name; choices.push(node); categories.appendChild(node);
     });
-    function update() { choices.forEach(function (node) { var selected = node.dataset.cat === record.cat; node.setAttribute('aria-pressed', String(selected)); node.lastChild.textContent = (selected ? '✓ ' : '') + node.dataset.cat; }); }
+    function update() { choices.forEach(function (node) { var selected = node.dataset.cat === record.cat; node.setAttribute('aria-pressed', String(selected)); node.lastChild.textContent = node.dataset.cat; }); }
     update();
     var urgent = el('input', { type: 'checkbox', checked: !!record.urgent });
     urgent.addEventListener('change', function () { record.urgent = urgent.checked; onChange(); });
     var noteId = 'note-' + (record.id || 'field'), note = el('textarea', { id: noteId, maxlength: 500, placeholder: '例：道路が30cmほど冠水、通行止めが必要' }); note.value = record.note || '';
     note.addEventListener('input', function () { record.note = S.util.clampText(note.value, 500); onChange(); });
-    box.append(paragraph('区分を1つ選んでください'), categories, el('label', { class: 'urgent-label' }, [urgent, '！ 至急（人命・通行止めなど）']), el('label', { for: noteId, text: 'コメント（任意）' }), note, paragraph('キーボードのマイクで声でも入力できます', 'muted'));
+    box.append(paragraph('区分'), categories, el('label', { class: 'urgent-label' }, [urgent, '至急（人命・通行止め）']), el('label', { for: noteId, text: 'コメント（なくてもよい）' }), note, paragraph('声でも入力できます', 'muted'));
     return box;
   }
   function picker(label, capture, video) {
@@ -171,7 +171,7 @@
     } finally {
       processing = false;
       root.document.querySelectorAll('input[type=file]').forEach(function (node) { node.disabled = false; });
-      var statusEnd = root.document.getElementById('photo-progress'); if (statusEnd) statusEnd.textContent = '下書きはこの端末に保存されます。';
+      var statusEnd = root.document.getElementById('photo-progress'); if (statusEnd) statusEnd.textContent = '下書きは端末に保存されます';
       updateSendButton();
     }
   }
@@ -183,7 +183,7 @@
     var list = currentDrafts(), missing = list.filter(function (r) { return !validPoint(r) && r.src !== 'none'; }).length;
     var count = root.document.getElementById('missing-count'); if (count) count.textContent = '場所が未設定：' + missing + '件';
     var node = root.document.getElementById('send-button');
-    if (node) { node.textContent = closed ? '受付停止中（送信待ちに保存）' : '送信する（' + list.length + '枚）'; node.disabled = processing || submitting || list.length === 0; node.setAttribute('aria-disabled', String(processing || submitting || list.length === 0 || missing > 0)); }
+    if (node) { node.textContent = closed ? '送信待ちに入れる（受付停止中）' : '送る（' + list.length + '枚）'; node.disabled = processing || submitting || list.length === 0; node.setAttribute('aria-disabled', String(processing || submitting || list.length === 0 || missing > 0)); }
   }
   function renderPhotoList() {
     var container = root.document.getElementById('photo-list'); if (!container) return;
@@ -192,14 +192,14 @@
     currentDrafts().forEach(function (record, index, list) {
       var name = record.kind === 'video' ? '動画' : '写真';
       if (mode === 'field') {
-        container.appendChild(el('figure', {}, [image(record), el('figcaption', { text: name + ' ' + (index + 1) }), button('✕ 外す', function () { return deleteDraft(record); }, true)]));
+        container.appendChild(el('figure', {}, [image(record), el('figcaption', { text: name + ' ' + (index + 1) }), button('外す', function () { return deleteDraft(record); }, true)]));
         return;
       }
       var located = validPoint(record) || record.src === 'none';
       var card = el('article', { id: 'card-' + record.id, class: 'photo-card stack' + (located ? '' : ' unset'), tabindex: '-1' });
       var locationLabel = paragraph(positionText(record), located ? 'success' : 'error');
       var choose = button('場所を決める', function () { openPlace(record.id); }, true);
-      var same = button(record.kind === 'video' || index > 0 && list[index - 1].kind === 'video' ? '前と同じ場所' : '前の写真と同じ場所', async function () {
+      var same = button('前と同じ場所', async function () {
         var prev = list[index - 1];
         if (prev && validPoint(prev)) { Object.assign(record, { lat: prev.lat, lng: prev.lng, acc: prev.acc, src: prev.src }); await persist(record); renderPhotoList(); }
       }, true); same.disabled = index === 0 || !validPoint(list[index - 1]);
@@ -212,7 +212,7 @@
       var info = el('div', { class: 'photo-card-info' }, [el('h3', { text: name + ' ' + (index + 1) }), paragraph('撮影日時：' + record.shot + (record.exif && record.exif.takenAt ? '' : '（ファイルの日時）')), locationLabel]);
       card.append(el('div', { class: 'photo-card-heading' }, [preview, info]), choose);
       if (validPoint(record)) card.appendChild(link('Googleマップで確認', S.exporter.googleMapsUrl(record.lat, record.lng)));
-      card.append(same, unknown, metadata(record, function () { persist(record); }), button('✕ この' + name + 'を外す', function () { return deleteDraft(record); }, true));
+      card.append(same, unknown, metadata(record, function () { persist(record); }), button('この' + name + 'を外す', function () { return deleteDraft(record); }, true));
       container.appendChild(card);
     });
     updateSendButton();
@@ -226,10 +226,10 @@
   }
   function renderHome() {
     heading('写真・動画を送る');
-    var actions = el('div', { class: 'home-actions' }, [button('📷 いまいる場所で送る', function () { startMode('field'); }), button('🗂 あとで場所を決めて送る', function () { startMode('batch'); })]);
+    var actions = el('div', { class: 'home-actions' }, [button('現在地で送る', function () { startMode('field'); }), button('場所を選んで送る', function () { startMode('batch'); })]);
     main.appendChild(actions);
     var current = drafts.filter(isCurrent);
-    if (current.length) main.appendChild(button('📝 前の続きがあります（' + current.length + '枚）', function () { startMode(current[current.length - 1].mode); }, true));
+    if (current.length) main.appendChild(button('前の続き（' + current.length + '枚）', function () { startMode(current[current.length - 1].mode); }, true));
     previousGroups(drafts).forEach(function (group) {
       var hasVideo = group.some(function (r) { return r.kind === 'video'; });
       var notice = el('div', { class: 'panel warning stack previous-drafts' }, [paragraph(previousLabel(group[0]) + (hasVideo ? 'で作りかけの写真・動画が ' : 'で作りかけの写真が ') + group.length + (hasVideo ? ' 件あります' : ' 枚あります'))]);
@@ -242,8 +242,8 @@
       }, true));
       main.appendChild(notice);
     });
-    var queue = button('⏳ 送信待ち ' + pending + '件', function () { navigate('queue'); }, true); queue.id = 'home-queue'; if (pending) queue.className = 'warning wide';
-    var links = el('div', { class: 'stack' }, [queue, button('📝 送った記録', function () { navigate('history'); }, true), el('a', { class: 'button secondary', href: 'help.html', text: '❓ 使い方' }), button('名前・所属を変える', function () { navigate('profile'); }, true), button('合言葉を入れ直す', function () { navigate('login'); }, true)]);
+    var queue = button('送信待ち ' + pending + '件', function () { navigate('queue'); }, true); queue.id = 'home-queue'; if (pending) queue.className = 'warning wide';
+    var links = el('div', { class: 'stack' }, [queue, button('送った記録', function () { navigate('history'); }, true), el('a', { class: 'button secondary', href: 'help.html', text: '使い方' }), button('名前・所属を変える', function () { navigate('profile'); }, true), button('合言葉を入れ直す', function () { navigate('login'); }, true)]);
     main.appendChild(links);
   }
   function profileFields(parent) {
@@ -253,7 +253,7 @@
     return function () { profile = { who: S.util.clampText(who.value, 40), org: S.util.clampText(org.value, 40) }; store('spm-profile', profile); };
   }
   function showLogin(message) {
-    heading('合言葉を入れてください');
+    heading('合言葉を入力');
     var box = el('div', { class: 'stack' }), input = el('input', { id: 'code', type: 'text', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false', inputmode: codeKind === 'digits' ? 'numeric' : 'text', maxlength: 128 });
     input.value = code || ''; var error = paragraph(message || '', 'error'); error.setAttribute('role', 'alert');
     box.append(el('label', { for: 'code', text: '投稿の合言葉' }), input, error);
@@ -262,7 +262,7 @@
       try { await login(S.util.normCode(input.value), error); } finally { submit.disabled = false; }
     });
     input.addEventListener('keydown', function (event) { if (event.key === 'Enter') submit.click(); }); box.appendChild(submit);
-    if (pending) box.appendChild(button('⏳ 送信待ちを見る', function () { navigate('queue'); }, true));
+    if (pending) box.appendChild(button('送信待ちを見る', function () { navigate('queue'); }, true));
     main.appendChild(box);
   }
   async function login(value, error) {
@@ -285,8 +285,8 @@
     return false;
   }
   function renderField() {
-    mode = 'field'; heading('写真・動画と場所を確認', true);
-    main.appendChild(el('div', { class: 'row media-pickers' }, [picker('📷 撮る', true), picker('🖼 写真を選ぶ', false), picker('🎥 動画', false, true)]));
+    mode = 'field'; heading('写真・動画と場所', true);
+    main.appendChild(el('div', { class: 'row media-pickers' }, [picker('撮る', true), picker('写真を選ぶ', false), picker('動画', false, true)]));
     main.append(paragraph('', 'muted'), el('p', { id: 'photo-progress', role: 'status' }), el('div', { id: 'photo-list', class: 'thumb-list' }), el('p', { id: 'gps-status', text: validPoint(field) ? positionText(field) : '現在地を確認しています…', role: 'status' }));
     var mapElement = el('div', { class: 'map', 'aria-label': '投稿する場所の地図' }); main.appendChild(mapElement);
     var home = validPoint(field) ? Object.assign({}, field, { zoom: 16 }) : mapHome();
@@ -307,21 +307,21 @@
     });
   }
   function renderBatch() {
-    mode = 'batch'; heading('写真ごとに場所を決める', true);
-    main.append(el('div', { class: 'row media-pickers' }, [picker('🖼 写真を選ぶ', false), picker('🎥 動画', false, true)]), paragraph('動画も1本ずつ場所を決めます。', 'muted'), el('p', { id: 'photo-progress', role: 'status' }), el('p', { id: 'missing-count', role: 'status' }), el('div', { id: 'photo-list', class: 'stack' }));
+    mode = 'batch'; heading('1件ずつ場所を選ぶ', true);
+    main.append(el('div', { class: 'row media-pickers' }, [picker('写真を選ぶ', false), picker('動画', false, true)]), paragraph('写真・動画ごとに場所を選びます', 'muted'), el('p', { id: 'photo-progress', role: 'status' }), el('p', { id: 'missing-count', role: 'status' }), el('div', { id: 'photo-list', class: 'stack' }));
     sendFooter(); renderPhotoList();
   }
   function sendFooter() {
     var send = button('', submitPhotos); send.id = 'send-button'; send.className = 'wide send-button';
-    main.appendChild(el('div', { class: 'send-footer stack' }, [paragraph('③ 場所と内容を確かめて送ってください'), send]));
+    main.appendChild(el('div', { class: 'send-footer stack' }, [paragraph('場所と内容を確認'), send]));
   }
   function openPlace(id) { target = id; var record = id === 'field' ? field : drafts.find(function (r) { return r.id === id; }); picked = validPoint(record) ? Object.assign({}, record) : null; navigate('place'); }
   function renderPlace() {
-    heading('② 場所を決める', true); main.classList.add('place-view');
+    heading('場所を決める', true); main.classList.add('place-view');
     if (!target) { navigate(mode, true); return; }
     var fields = el('div', { class: 'place-fields stack' }), landmarks = el('select', { id: 'landmark', 'aria-label': '目印から選ぶ' }, [el('option', { value: '', text: '目印から選ぶ' })]);
     (settings.landmarks || []).forEach(function (item, i) { landmarks.appendChild(el('option', { value: i, text: item.name })); });
-    var input = el('textarea', { id: 'location-text', rows: 2, placeholder: '37.0412, 136.7790 または Googleマップのリンク' }), status = paragraph(picked ? positionText(picked) : '地図を押して場所を選んでください'); status.setAttribute('role', 'status');
+    var input = el('textarea', { id: 'location-text', rows: 2, placeholder: '37.0412, 136.7790 または Googleマップのリンク' }), status = paragraph(picked ? positionText(picked) : '地図を押して場所を選ぶ'); status.setAttribute('role', 'status');
     var mapElement = el('div', { class: 'map place-map', 'aria-label': '場所を決める地図' });
     var confirm = button('この場所に決める', async function () {
       if (!validPoint(picked)) { S.dom.toast('地図を押すか、座標や目印から場所を選んでください。'); return; }
@@ -346,7 +346,7 @@
       if (!validPoint(parsed)) { S.dom.toast('座標を読み取れませんでした。Googleマップの座標かリンクを入れてください。'); return; }
       pick({ lat: parsed.lat, lng: parsed.lng, src: 'gmap' }, true);
     }, true);
-    fields.append(el('label', { for: 'landmark', text: '目印から選ぶ' }), landmarks, el('label', { for: 'location-text', text: 'Googleマップの座標やリンクを貼る' }), input, read);
+    fields.append(el('label', { for: 'landmark', text: '目印から選ぶ' }), landmarks, el('label', { for: 'location-text', text: 'Googleマップの座標・リンク' }), input, read);
     main.append(fields, mapElement, status, check, confirm);
     var home = picked ? Object.assign({}, picked, { zoom: 16 }) : mapHome();
     map = S.mapbase.createMap(mapElement, Object.assign({}, home, { mobile: true, baseControl: 'above', onLocate: function (p) { pick(p, true); } }));
@@ -391,13 +391,13 @@
     } finally { submitting = false; if (view === 'field' || view === 'batch') render(); else updateSendButton(); }
   }
   function renderSending() {
-    heading('③ 送信しています');
-    main.append(el('p', { id: 'send-progress', text: '0 / ' + (result ? result.total : 0) + ' 枚', role: 'status' }), el('progress', { id: 'send-bar', value: 0, max: result ? result.total : 1 }), el('p', { id: 'video-send-progress', role: 'status' }), paragraph('このままお待ちください。写真・動画は送信待ちに残ります。'));
+    heading('送信中');
+    main.append(el('p', { id: 'send-progress', text: '0 / ' + (result ? result.total : 0) + ' 枚', role: 'status' }), el('progress', { id: 'send-bar', value: 0, max: result ? result.total : 1 }), el('p', { id: 'video-send-progress', role: 'status' }), paragraph('送信中です。未送信分は送信待ちに残ります'));
   }
   function renderResult() {
     heading('送信の結果'); result = result || { sent: 0, waiting: pending, nos: [] };
-    if (result.sent) main.appendChild(paragraph('✓ ' + result.sent + '枚 送信しました（受付番号 ' + result.nos.map(function (n) { return 'No.' + n; }).join('・') + '）', 'success result-title'));
-    if (result.waiting) { main.appendChild(paragraph('⏳ ' + result.waiting + '枚は送信待ちに入れました。電波が戻ると自動で送ります', 'panel warning')); backup(main); }
+    if (result.sent) main.appendChild(paragraph(result.sent + '枚 送信しました（受付番号 ' + result.nos.map(function (n) { return 'No.' + n; }).join('・') + '）', 'success result-title'));
+    if (result.waiting) { main.appendChild(paragraph(result.waiting + '枚は送信待ち。電波が戻ると自動で送ります', 'panel warning')); backup(main); }
     main.appendChild(el('div', { class: 'stack' }, [button('ホームに戻る', function () { navigate('home', true); }), button('送信待ちを見る', function () { navigate('queue'); }, true)]));
   }
   async function refreshAuth() {
@@ -411,7 +411,7 @@
   }
   async function renderRecords(history) {
     var version = recordsVersion;
-    heading(history ? '📝 送った記録' : '⏳ 送信待ち', true);
+    heading(history ? '送った記録' : '送信待ち', true);
     if (!history) {
       main.appendChild(button('今すぐ送る', async function () { if (await refreshAuth()) { await S.outbox.send(); if (view === 'queue') render(); } }));
       if (closed) backup(main);
@@ -438,7 +438,7 @@
     });
     records.filter(function (r) { return history || !isPrevious(r); }).forEach(function (r) {
       var name = r.kind === 'video' ? '動画' : '写真';
-      var body = el('div', {}, [paragraph(history ? '✓ 受付番号 No.' + r.no : r.state === 'bad' ? '！ 送れない' + name : '⏳ 送信待ち'), paragraph(S.util.formatJst(new Date(r.sentAt || r.createdAt))), paragraph(r.cat), paragraph(r.lastReason || (history ? '送信済み' : '電波が戻ると自動で送ります'))]);
+      var body = el('div', {}, [paragraph(history ? '受付番号 No.' + r.no : r.state === 'bad' ? '送れない' + name : '送信待ち'), paragraph(S.util.formatJst(new Date(r.sentAt || r.createdAt))), paragraph(r.cat), paragraph(r.lastReason || (history ? '送信済み' : '電波が戻ると自動で送ります'))]);
       if (!history && r.kind === 'video') body.appendChild(el('p', { id: 'video-progress-' + r.id, role: 'status', text: S.video.progressText(r.size, r.videoNext || 0) }));
       if (!history) body.appendChild(button('この' + name + 'を消す', async function () {
         if (S.outbox.isSending()) { S.dom.toast('送信が終わってから消してください。'); return; }
@@ -450,7 +450,11 @@
   function render() {
     cleanup(); S.dom.clear(main); main.className = '';
     root.document.getElementById('disaster-name').textContent = settings && settings.disaster ? settings.disaster.name + (settings.disaster.kind === '訓練' ? '（訓練）' : '') : '';
-    root.document.getElementById('steps').textContent = view === 'place' ? '① 写真 → 【② 場所】 → ③ 送る' : view === 'sending' || view === 'result' ? '① 写真 → ② 場所 → 【③ 送る】' : '① 写真 → ② 場所 → ③ 送る';
+    var step = view === 'place' ? 1 : view === 'sending' || view === 'result' ? 2 : 0;
+    root.document.querySelectorAll('#steps span').forEach(function (node, index) {
+      if (index === step) { node.setAttribute('aria-current', 'step'); node.style.fontWeight = '700'; }
+      else { node.removeAttribute('aria-current'); node.style.fontWeight = '400'; }
+    });
     if (!settings && !['login', 'queue', 'history'].includes(view)) view = 'login';
     if (view === 'login') showLogin();
     else if (view === 'home') renderHome();
@@ -498,7 +502,7 @@
     if (code && !closed) await login(code);
     else { view = settings && code && code === settingsCode ? 'home' : 'login'; navigate(view, true); }
     await S.outbox.changed();
-    if (drafts.some(isCurrent)) S.dom.toast('前の続きがあります。ホームの「前の続き」から戻れます。');
+    if (drafts.some(isCurrent)) S.dom.toast('下書きがあります。「前の続き」で再開できます');
   }
   function openChangedLink() {
     if (!readLinkCode()) return;
@@ -521,7 +525,7 @@
     if (!S.api.getUrl()) { S.dom.clear(main); heading('設定が済んでいません'); main.appendChild(paragraph('受付の接続先が設定されていません。管理担当の方に確認してください。', 'error')); return; }
     if ('serviceWorker' in root.navigator && (root.location.protocol === 'https:' || ['localhost', '127.0.0.1'].includes(root.location.hostname))) root.navigator.serviceWorker.register('sw.js', { scope: './' }).catch(function () { S.dom.toast('オフライン用の保存ができませんでした。通信できる場所でお使いください。'); });
     if (root.navigator.storage && root.navigator.storage.persist) root.navigator.storage.persist().catch(function () {});
-    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(S.util.userMessage(e, '保存した記録を読み込めませんでした。空き容量とブラウザの設定を確認してください。'), 'error'); S.dom.clear(main); heading('写真・動画を保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
+    try { drafts = await S.outbox.all('draft'); pending = (await S.outbox.all('outbox')).length; } catch (e) { announce(S.util.userMessage(e, '保存した記録を読み込めませんでした。空き容量とブラウザの設定を確認してください。'), 'error'); S.dom.clear(main); heading('保存できません'); main.appendChild(paragraph('Safari／Chromeで開き直し、空き容量とブラウザの設定を確認してください。')); return; }
     S.outbox.start({
       getAuth: function () { return { token: closed ? '' : token, disasterId: settings && settings.disaster.id }; },
       onReply: handleReply,
@@ -535,8 +539,8 @@
     root.addEventListener('spm-outbox', function (event) {
       pending = event.detail.count;
       var otherCount = event.detail.records.filter(isPrevious).length;
-      S.dom.banner('warning', pending ? '⏳ 送信待ち ' + pending + '件（電波が戻ると自動で送ります）' + (otherCount ? '（前の受付の分 ' + otherCount + '件）' : '') : '', 'pending-banner');
-      var homeQueue = root.document.getElementById('home-queue'); if (homeQueue) { homeQueue.textContent = '⏳ 送信待ち ' + pending + '件'; homeQueue.className = pending ? 'warning wide' : 'secondary'; }
+      S.dom.banner('warning', pending ? '送信待ち ' + pending + '件（電波が戻ると自動で送ります）' + (otherCount ? '（前の受付の分 ' + otherCount + '件）' : '') : '', 'pending-banner');
+      var homeQueue = root.document.getElementById('home-queue'); if (homeQueue) { homeQueue.textContent = '送信待ち ' + pending + '件'; homeQueue.className = pending ? 'warning wide' : 'secondary'; }
       if (view === 'queue' && !event.detail.sending) render();
     });
     await S.outbox.changed();
